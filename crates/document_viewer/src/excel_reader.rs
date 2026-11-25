@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet, VecDeque},
     io::Cursor,
     sync::{Arc, Mutex},
 };
@@ -9,12 +9,13 @@ use calamine::Reader as _;
 use gpui::{
     App, Context, Entity, EventEmitter, FocusHandle, Focusable, SharedString, Task, Window, div,
 };
-use tabular_data_preview::TableView;
 use tabular_data_preview::types::{LineNumber, TableCell, TableLikeContent};
+use tabular_data_preview::{CellEdited, TableView};
 use ui::prelude::*;
 use ui::table_row::TableRow;
 
 use crate::DocumentItem;
+use crate::xlsx_writer;
 
 /// Upper bound on rendered rows per sheet.
 const MAX_ROWS: usize = 20_000;
@@ -48,12 +49,36 @@ pub struct ExcelReader {
     truncation: Option<Truncation>,
     table: Entity<TableView>,
     pub(crate) error: Option<SharedString>,
+    /// Whether the workbook container can be written at all (`xlsx`/`xlsm`).
+    writable: bool,
+    /// Sheets whose columns were already sized to their content. Kept across
+    /// reloads so an edit does not undo the user's own column resizing.
+    auto_width_sheets: HashSet<usize>,
+    /// Edits waiting for the running write task to pick them up.
+    pending_edits: VecDeque<PendingEdit>,
+    save_task: Option<Task<()>>,
+    saving: bool,
+    save_error: Option<SharedString>,
+    /// Bytes produced by the most recent successful write. Consecutive edits in
+    /// the same reload window patch this copy, so a fast second edit cannot
+    /// overwrite the first one with stale bytes.
+    latest_bytes: Option<Arc<Vec<u8>>>,
     _open_task: Task<Result<()>>,
+}
+
+struct PendingEdit {
+    sheet: usize,
+    /// One-based coordinates in the worksheet.
+    row: u32,
+    column: u32,
+    value: String,
 }
 
 struct SheetContent {
     table: TableLikeContent,
     truncation: Option<Truncation>,
+    /// Worksheet cell that display row 0 and column 0 map back to.
+    origin: (u32, u32),
 }
 
 #[derive(Clone, Copy)]
@@ -70,6 +95,16 @@ impl ExcelReader {
         cx: &mut Context<Self>,
     ) -> Self {
         let table = cx.new(|cx| TableView::new(window, cx));
+        // Remote worktrees have no write path for binary documents: the
+        // project filesystem is the client's own, so a write would land on the
+        // wrong host. They stay read-only until a server-side write exists.
+        let writable = item.read(cx).file.is_local
+            && item
+                .read(cx)
+                .file
+                .path
+                .extension()
+                .is_some_and(xlsx_writer::supports_editing);
 
         let bytes = item.read(cx).contents.clone();
         let open_task = cx.spawn(async move |this, cx| {
@@ -96,6 +131,14 @@ impl ExcelReader {
             })
         });
 
+        cx.subscribe(&table, |reader, _, event: &CellEdited, cx| {
+            reader.on_cell_edited(event, cx);
+        })
+        .detach();
+        // The status bar follows the keyboard cursor; the grid is the only
+        // entity that knows where it is.
+        cx.observe(&table, |_, _, cx| cx.notify()).detach();
+
         Self {
             item,
             project,
@@ -106,8 +149,154 @@ impl ExcelReader {
             truncation: None,
             table,
             error: None,
+            writable,
+            auto_width_sheets: HashSet::new(),
+            pending_edits: VecDeque::new(),
+            save_task: None,
+            saving: false,
+            save_error: None,
+            latest_bytes: None,
             _open_task: open_task,
         }
+    }
+
+    /// Spreadsheet columns are sized to their values instead of the grid's
+    /// fixed default, so a cell holding a sentence is readable without
+    /// resizing it by hand. Sampling is bounded because only the first screenful
+    /// can be read comfortably anyway.
+    fn apply_auto_column_widths(&self, content: &TableLikeContent, cx: &mut Context<Self>) {
+        const SAMPLE_ROWS: usize = 200;
+        const MIN_WIDTH: f32 = 96.0;
+        const MAX_WIDTH: f32 = 380.0;
+        const PADDING: f32 = 24.0;
+
+        let widths: Vec<AbsoluteLength> = (0..content.number_of_cols)
+            .map(|column| {
+                let mut widest = content
+                    .headers
+                    .get(column)
+                    .and_then(|cell| cell.display_value())
+                    .map(|value| estimate_text_width(value.as_ref()))
+                    .unwrap_or(0.0);
+                for row in content.rows.iter().take(SAMPLE_ROWS) {
+                    if let Some(value) = row.get(column).and_then(|cell| cell.display_value()) {
+                        widest = widest.max(estimate_text_width(value.as_ref()));
+                    }
+                }
+                AbsoluteLength::Pixels(px((widest + PADDING).clamp(MIN_WIDTH, MAX_WIDTH)))
+            })
+            .collect();
+
+        self.table
+            .update(cx, |table, cx| table.set_data_column_widths(&widths, cx));
+    }
+
+    /// Lets the grid accept double-click edits only when this container can be
+    /// written and a parsed workbook is on screen.
+    fn sync_table_editability(&self, cx: &mut Context<Self>) {
+        let editable = self.writable && self.workbook.is_some() && self.error.is_none();
+        self.table
+            .update(cx, |table, cx| table.set_editable(editable, cx));
+    }
+
+    fn on_cell_edited(&mut self, event: &CellEdited, cx: &mut Context<Self>) {
+        if !self.writable {
+            return;
+        }
+        let Some(content) = self.sheet_cache.get(&self.active_sheet) else {
+            return;
+        };
+        let origin = content.origin;
+        let unchanged = content
+            .table
+            .rows
+            .get(event.cell.row.0)
+            .and_then(|row| row.get(event.cell.col.0))
+            .and_then(|cell| cell.display_value())
+            .is_some_and(|value| value.as_ref() == event.value.as_ref());
+        if unchanged {
+            return;
+        }
+
+        let row = origin.0 + event.cell.row.0 as u32 + 1;
+        let column = origin.1 + event.cell.col.0 as u32 + 1;
+        self.pending_edits.push_back(PendingEdit {
+            sheet: self.active_sheet,
+            row,
+            column,
+            value: event.value.to_string(),
+        });
+        self.save_error = None;
+        self.start_saving(cx);
+        cx.notify();
+    }
+
+    /// Writes queued cell edits in order, then asks the item to re-read the file
+    /// so the preview shows exactly what was saved.
+    fn start_saving(&mut self, cx: &mut Context<Self>) {
+        if self.save_task.is_some() || self.pending_edits.is_empty() {
+            return;
+        }
+        let edits: Vec<PendingEdit> = self.pending_edits.drain(..).collect();
+        let sheet_names = self.sheet_names.clone();
+        let item = self.item.clone();
+        let fs = self.project.read(cx).fs().clone();
+        let path = item.read(cx).host_path(cx);
+        let mut bytes = self
+            .latest_bytes
+            .clone()
+            .unwrap_or_else(|| item.read(cx).contents.clone());
+
+        self.saving = true;
+        self.save_task = Some(cx.spawn(async move |this, cx| {
+            let mut error_message = None;
+            for edit in edits {
+                let Some(sheet_name) = sheet_names.get(edit.sheet) else {
+                    continue;
+                };
+                let updated = match xlsx_writer::set_cell_value(
+                    &bytes,
+                    sheet_name,
+                    edit.row,
+                    edit.column,
+                    &edit.value,
+                ) {
+                    Ok(updated) => updated,
+                    Err(error) => {
+                        error_message = Some(format!("{error:#}"));
+                        break;
+                    }
+                };
+                if let Err(error) = fs.write(&path, &updated).await {
+                    error_message = Some(format!("{error:#}"));
+                    break;
+                }
+                bytes = Arc::new(updated);
+            }
+
+            this.update(cx, |reader, cx| {
+                reader.saving = false;
+                reader.save_task = None;
+                match error_message {
+                    None => {
+                        reader.latest_bytes = Some(bytes);
+                        reader.save_error = None;
+                        reader.item.update(cx, |item, cx| item.reload_from_disk(cx));
+                        if !reader.pending_edits.is_empty() {
+                            reader.start_saving(cx);
+                        }
+                    }
+                    Some(error) => {
+                        reader.save_error = Some(error.into());
+                        reader.latest_bytes = None;
+                        // Later edits were built on bytes that were never written.
+                        reader.pending_edits.clear();
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        }));
     }
 
     pub fn load_sheet(&mut self, index: usize, cx: &mut Context<Self>) {
@@ -126,6 +315,7 @@ impl ExcelReader {
                 table.set_loading(false, cx);
                 table.set_contents(cached.table.clone(), cx);
             });
+            self.sync_table_editability(cx);
             cx.notify();
             return;
         }
@@ -143,11 +333,12 @@ impl ExcelReader {
             let result = task.await;
             this.update(cx, |reader, cx| {
                 match result {
-                    Some((contents, truncation)) => {
+                    Some((contents, truncation, origin)) => {
                         reader.truncation = truncation;
                         let contents = Arc::new(SheetContent {
                             table: contents,
                             truncation,
+                            origin,
                         });
                         reader
                             .sheet_cache
@@ -156,6 +347,10 @@ impl ExcelReader {
                             table.set_loading(false, cx);
                             table.set_contents(contents.table.clone(), cx);
                         });
+                        if reader.auto_width_sheets.insert(reader.active_sheet) {
+                            reader.apply_auto_column_widths(&contents.table, cx);
+                        }
+                        reader.sync_table_editability(cx);
                     }
                     None => {
                         reader.error = Some(i18n::t!("a269e5f69bb6e903").into());
@@ -180,6 +375,8 @@ impl ExcelReader {
         self.error = None;
         self.sheet_cache.clear();
         self.truncation = None;
+        self.latest_bytes = None;
+        self.save_error = None;
         self.table
             .update(cx, |table, cx| table.set_loading(true, cx));
         let opened = cx.background_spawn(async move {
@@ -216,6 +413,28 @@ impl EventEmitter<()> for ExcelReader {}
 
 #[cfg(test)]
 impl ExcelReader {
+    pub(crate) fn is_writable_for_test(&self) -> bool {
+        self.writable
+    }
+
+    /// Simulates committing an inline edit in the grid, which is otherwise only
+    /// reachable through a double-click on a rendered cell.
+    pub(crate) fn apply_cell_edit_for_test(
+        &mut self,
+        row: usize,
+        column: usize,
+        value: &str,
+        cx: &mut Context<Self>,
+    ) {
+        self.on_cell_edited(
+            &CellEdited {
+                cell: tabular_data_preview::types::DataCellId::new(row, column),
+                value: value.into(),
+            },
+            cx,
+        );
+    }
+
     /// Test hook: the displayed text of one cell in the active sheet.
     pub(crate) fn cell_text_for_test(&self, row: usize, column: usize) -> Option<String> {
         self.sheet_cache
@@ -238,44 +457,69 @@ impl Focusable for ExcelReader {
 impl Render for ExcelReader {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let colors = cx.theme().colors();
+        let is_remote = !self.item.read(cx).file.is_local;
+        let active_name = self
+            .sheet_names
+            .get(self.active_sheet)
+            .cloned()
+            .unwrap_or_default();
+
         let mut header = h_flex()
+            .id("excel-toolbar")
+            .debug_selector(|| "excel-toolbar".to_string())
             .flex_shrink_0()
             .w_full()
+            .h(px(32.))
+            .items_center()
+            .gap_2()
+            .px_3()
             .border_b_1()
             .border_color(colors.border)
             .bg(colors.toolbar_background)
-            .px_2()
-            .gap_1()
-            .overflow_x_hidden();
+            .child(
+                Label::new(active_name)
+                    .size(LabelSize::Small)
+                    .color(Color::Default),
+            )
+            .child(
+                Label::new(if self.writable {
+                    i18n::t!("14934434d409b13a")
+                } else {
+                    i18n::t!("72bb90897ab1eadc")
+                })
+                .size(LabelSize::Small)
+                .color(if self.writable {
+                    Color::Accent
+                } else {
+                    Color::Muted
+                }),
+            )
+            .when(!self.writable && is_remote, |header| {
+                header.child(
+                    Label::new(i18n::t!("6373a00b628161b3"))
+                        .size(LabelSize::Small)
+                        .color(Color::Muted),
+                )
+            })
+            .child(div().flex_1());
 
-        if self.sheet_names.len() > 1 {
-            for (index, name) in self.sheet_names.iter().enumerate() {
-                let is_active = index == self.active_sheet;
-                header = header.child(
-                    div()
-                        .id(("sheet-tab", index))
-                        .px_2()
-                        .py_1()
-                        .cursor_pointer()
-                        .rounded_t_sm()
-                        .when(is_active, |this| {
-                            this.bg(colors.element_selected)
-                                .border_b_2()
-                                .border_color(colors.border_focused)
-                        })
-                        .when(!is_active, |this| {
-                            this.hover(|style| style.bg(colors.element_hover))
-                        })
-                        .child(Label::new(name.clone()).size(LabelSize::Small))
-                        .on_click(cx.listener(move |this, _, _window, cx| {
-                            this.load_sheet(index, cx);
-                        })),
-                );
-            }
+        if self.saving {
+            header = header.child(
+                Label::new(i18n::t!("23e39291d6135814"))
+                    .size(LabelSize::Small)
+                    .color(Color::Muted),
+            );
         }
-
+        if let Some(error) = self.save_error.clone() {
+            let detail: String = error.chars().take(60).collect();
+            header = header.child(
+                Label::new(format!("{}: {detail}", i18n::t!("2c07997249abaa76")))
+                    .size(LabelSize::Small)
+                    .color(Color::Error),
+            );
+        }
         if let Some(truncation) = self.truncation {
-            header = header.child(div().flex_1()).child(
+            header = header.child(
                 Label::new(i18n::t!(
                     "a3c3a58431375a1c",
                     shown = truncation.shown_rows,
@@ -310,6 +554,104 @@ impl Render for ExcelReader {
                 .into_any_element()
         };
 
+        // Excel keeps its sheet tabs along the bottom edge, with the selected
+        // one raised out of the strip.
+        let mut tabs = h_flex()
+            .id("excel-sheet-tabs")
+            .debug_selector(|| "excel-sheet-tabs".to_string())
+            .h_full()
+            .flex_shrink_0();
+        for (index, name) in self.sheet_names.iter().enumerate() {
+            let is_active = index == self.active_sheet;
+            tabs =
+                tabs.child(
+                    div()
+                        .id(("sheet-tab", index))
+                        .h_full()
+                        .px_3()
+                        .flex()
+                        .items_center()
+                        .cursor_pointer()
+                        .when(is_active, |this| {
+                            this.bg(colors.editor_background)
+                                .border_t_2()
+                                .border_color(colors.border_focused)
+                        })
+                        .when(!is_active, |this| {
+                            this.hover(|style| style.bg(colors.element_hover))
+                        })
+                        .child(Label::new(name.clone()).size(LabelSize::Small).color(
+                            if is_active {
+                                Color::Default
+                            } else {
+                                Color::Muted
+                            },
+                        ))
+                        .on_click(cx.listener(move |this, _, _window, cx| {
+                            this.load_sheet(index, cx);
+                        })),
+                );
+        }
+
+        let mut status = h_flex()
+            .id("excel-status-bar")
+            .debug_selector(|| "excel-status-bar".to_string())
+            .h_full()
+            .items_center()
+            .gap_2()
+            .pl_3()
+            .pr_3()
+            .flex_shrink_0();
+        if let Some(content) = self.sheet_cache.get(&self.active_sheet).cloned() {
+            if let Some(selection) = self.table.read(cx).selection() {
+                let reference = format!(
+                    "{}{}",
+                    column_name(content.origin.1 as usize + selection.focus.col.0),
+                    content.origin.0 as usize + selection.focus.row.0 + 1
+                );
+                status = status.child(
+                    Label::new(reference)
+                        .size(LabelSize::Small)
+                        .color(Color::Default),
+                );
+                if let Some(value) = self.table.read(cx).cell_display_value(selection.focus) {
+                    let mut text: String = value.chars().take(64).collect();
+                    if text.chars().count() < value.chars().count() {
+                        text.push('…');
+                    }
+                    if !text.is_empty() {
+                        status = status
+                            .child(Label::new("·").size(LabelSize::Small).color(Color::Muted));
+                        status =
+                            status.child(div().max_w(px(320.)).child(
+                                Label::new(text).size(LabelSize::Small).color(Color::Muted),
+                            ));
+                    }
+                }
+            } else {
+                status = status.child(
+                    Label::new(format!(
+                        "{} × {}",
+                        content.table.rows.len(),
+                        content.table.number_of_cols
+                    ))
+                    .size(LabelSize::Small)
+                    .color(Color::Muted),
+                );
+            }
+        }
+
+        let footer = h_flex()
+            .flex_shrink_0()
+            .w_full()
+            .h(px(28.))
+            .border_t_1()
+            .border_color(colors.border)
+            .bg(colors.toolbar_background)
+            .child(tabs)
+            .child(div().flex_1())
+            .child(status);
+
         div()
             .track_focus(&self.focus_handle(cx))
             .key_context("ExcelReader")
@@ -326,6 +668,7 @@ impl Render for ExcelReader {
             .bg(colors.editor_background)
             .child(header)
             .child(body)
+            .child(footer)
     }
 }
 
@@ -333,7 +676,8 @@ impl Render for ExcelReader {
 /// row/column/cell caps. Returns the content plus truncation information.
 fn sheet_to_table(
     range: &calamine::Range<calamine::Data>,
-) -> (TableLikeContent, Option<Truncation>) {
+) -> (TableLikeContent, Option<Truncation>, (u32, u32)) {
+    let origin = range.start().unwrap_or((0, 0));
     let total_rows = range.height();
     let total_cols = range.width();
     let shown_cols = total_cols.min(MAX_COLS);
@@ -381,7 +725,15 @@ fn sheet_to_table(
         shown_rows: content.rows.len(),
         total_rows,
     });
-    (content, truncation)
+    (content, truncation, origin)
+}
+
+/// Rough width of one line of cell text; CJK glyphs are about twice as wide
+/// as the UI font's Latin glyphs.
+fn estimate_text_width(text: &str) -> f32 {
+    text.chars()
+        .map(|character| if character.is_ascii() { 7.5 } else { 15.0 })
+        .sum()
 }
 
 /// Spreadsheet column label: `A`..`Z`, `AA`..`AZ`, ...
@@ -462,7 +814,7 @@ pub(crate) mod tests {
     fn sheet_to_table_caps_rows() {
         let mut range = calamine::Range::new((0, 0), (MAX_ROWS as u32 + 10, 2));
         range.set_value((0, 0), calamine::Data::Int(7));
-        let (content, truncation) = sheet_to_table(&range);
+        let (content, truncation, _) = sheet_to_table(&range);
         assert_eq!(content.rows.len(), MAX_ROWS);
         assert_eq!(content.number_of_cols, 3);
         assert!(truncation.is_some());
@@ -540,7 +892,7 @@ pub(crate) mod tests {
             .expect("minimal xlsx should open");
         assert_eq!(workbook.sheet_names(), &["数据"]);
         let range = workbook.worksheet_range("数据").expect("sheet should read");
-        let (content, truncation) = sheet_to_table(&range);
+        let (content, truncation, _) = sheet_to_table(&range);
         assert!(truncation.is_none());
         assert_eq!(content.rows.len(), 2);
         assert_eq!(content.rows[0][0].display_value().unwrap().as_ref(), "名称");

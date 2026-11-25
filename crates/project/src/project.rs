@@ -3535,7 +3535,7 @@ impl Project {
         path: ProjectPath,
         cx: &mut Context<Self>,
     ) -> Task<Result<(Option<ProjectEntryId>, Entity<Buffer>)>> {
-        log::info!("[open-debug] opening buffer {:?}", path.path.as_unix_str());
+        log::debug!("[open-debug] opening buffer {:?}", path.path.as_unix_str());
         let task = self.open_buffer(path, cx);
         cx.spawn(async move |_project, cx| {
             let buffer = task.await?;
@@ -3747,7 +3747,7 @@ impl Project {
         else {
             return Err(anyhow!("unsupported document format"));
         };
-        log::info!(
+        log::debug!(
             "[open-debug] load_document_file {:?} limit={limit}",
             path.path.as_unix_str()
         );

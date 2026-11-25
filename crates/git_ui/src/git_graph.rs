@@ -1585,7 +1585,57 @@ pub struct GitGraph {
     sidebar_visible: bool,
     sidebar_width: Pixels,
     sidebar_branches: Vec<Branch>,
+    /// The sidebar splits its branch list into local/remote trees. Both trees and
+    /// the split lists are derived from `sidebar_branches`, so they are rebuilt
+    /// when the branch list changes instead of on every repaint.
+    sidebar_local_branches: Vec<Branch>,
+    sidebar_remote_branches: Vec<Branch>,
+    sidebar_local_tree: BranchTreeNode,
+    sidebar_remote_tree: BranchTreeNode,
     sidebar_collapsed_folders: HashSet<SharedString>,
+}
+
+/// The commits the table currently shows, addressed by visible row.
+///
+/// Materializing a `Vec<usize>` of every loaded commit made each frame allocate
+/// and fill a vector as large as the repository history. The unfiltered case is
+/// now pure arithmetic, and only a confirmed search result list is stored.
+#[derive(Clone)]
+enum VisibleCommits {
+    All(usize),
+    Filtered(Arc<[usize]>),
+}
+
+impl VisibleCommits {
+    fn len(&self) -> usize {
+        match self {
+            Self::All(count) => *count,
+            Self::Filtered(indices) => indices.len(),
+        }
+    }
+
+    fn get(&self, row: usize) -> Option<usize> {
+        match self {
+            Self::All(count) => (row < *count).then_some(row),
+            Self::Filtered(indices) => indices.get(row).copied(),
+        }
+    }
+
+    fn first(&self) -> Option<usize> {
+        self.get(0)
+    }
+
+    fn last(&self) -> Option<usize> {
+        self.get(self.len().checked_sub(1)?)
+    }
+
+    /// Visible row of `commit_index`, if it is shown.
+    fn row_of(&self, commit_index: usize) -> Option<usize> {
+        match self {
+            Self::All(count) => (commit_index < *count).then_some(commit_index),
+            Self::Filtered(indices) => indices.iter().position(|index| *index == commit_index),
+        }
+    }
 }
 
 impl GitGraph {
@@ -1624,9 +1674,10 @@ impl GitGraph {
         visibility
     }
 
-    fn visible_commit_indices(&self) -> Vec<usize> {
+    fn visible_commits(&self) -> VisibleCommits {
         if self.only_show_search_results() {
-            self.graph_data
+            let indices = self
+                .graph_data
                 .commits
                 .iter()
                 .enumerate()
@@ -1636,9 +1687,10 @@ impl GitGraph {
                         .contains(&commit.data.sha)
                         .then_some(index)
                 })
-                .collect()
+                .collect::<Vec<_>>();
+            VisibleCommits::Filtered(indices.into())
         } else {
-            (0..self.graph_data.commits.len()).collect()
+            VisibleCommits::All(self.graph_data.commits.len())
         }
     }
 
@@ -1653,11 +1705,7 @@ impl GitGraph {
             .last_item_size
             .map_or(window.viewport_size().height, |size| size.item.height);
 
-        ((viewport_height / row_height).ceil() as usize).min(if self.only_show_search_results() {
-            self.visible_commit_indices().len()
-        } else {
-            self.graph_data.commits.len()
-        })
+        ((viewport_height / row_height).ceil() as usize).min(self.visible_commits().len())
     }
 
     fn graph_canvas_content_width(&self) -> Pixels {
@@ -1894,6 +1942,10 @@ impl GitGraph {
             sidebar_visible: true,
             sidebar_width: GIT_SIDEBAR_DEFAULT_WIDTH,
             sidebar_branches: Vec::new(),
+            sidebar_local_branches: Vec::new(),
+            sidebar_remote_branches: Vec::new(),
+            sidebar_local_tree: BranchTreeNode::default(),
+            sidebar_remote_tree: BranchTreeNode::default(),
             sidebar_collapsed_folders: HashSet::default(),
         };
 
@@ -2164,7 +2216,7 @@ impl GitGraph {
         cx: &mut Context<Self>,
     ) -> Vec<Vec<AnyElement>> {
         let repository = self.get_repository(cx);
-        let visible_commit_indices = self.visible_commit_indices();
+        let visible_commits = self.visible_commits();
 
         let row_height = Self::row_height(window, cx);
 
@@ -2184,14 +2236,11 @@ impl GitGraph {
         if let Some(repository) = repository.as_ref() {
             const FETCH_RANGE: usize = 100;
             repository.update(cx, |repository, cx| {
-                visible_commit_indices
-                    .get(
-                        range.start.saturating_sub(FETCH_RANGE)
-                            ..(range.end + FETCH_RANGE).min(visible_commit_indices.len()),
-                    )
-                    .unwrap_or_default()
-                    .iter()
-                    .filter_map(|&index| self.graph_data.commits.get(index))
+                let start = range.start.saturating_sub(FETCH_RANGE);
+                let end = (range.end + FETCH_RANGE).min(visible_commits.len());
+                (start..end)
+                    .filter_map(|row| visible_commits.get(row))
+                    .filter_map(|index| self.graph_data.commits.get(index))
                     .for_each(|commit| {
                         repository.fetch_commit_data(commit.data.sha, false, cx);
                     });
@@ -2200,7 +2249,7 @@ impl GitGraph {
 
         range
             .map(|visible_index| {
-                let Some(&idx) = visible_commit_indices.get(visible_index) else {
+                let Some(idx) = visible_commits.get(visible_index) else {
                     return vec![
                         div().h(row_height).into_any_element(),
                         div().h(row_height).into_any_element(),
@@ -2361,7 +2410,7 @@ impl GitGraph {
 
     fn select_first(&mut self, _: &SelectFirst, _window: &mut Window, cx: &mut Context<Self>) {
         let index = if self.only_show_search_results() {
-            self.visible_commit_indices().first().copied()
+            self.visible_commits().first()
         } else {
             (!self.graph_data.commits.is_empty()).then_some(0)
         };
@@ -2380,7 +2429,7 @@ impl GitGraph {
 
     fn select_last(&mut self, _: &SelectLast, _window: &mut Window, cx: &mut Context<Self>) {
         let index = if self.only_show_search_results() {
-            self.visible_commit_indices().last().copied()
+            self.visible_commits().last()
         } else {
             self.graph_data.commits.len().checked_sub(1)
         };
@@ -2412,15 +2461,13 @@ impl GitGraph {
             self.select_entry(index, ScrollStrategy::Nearest, cx);
             return;
         }
-        let indices = self.visible_commit_indices();
-        let Some(last_row) = indices.len().checked_sub(1) else {
+        let commits = self.visible_commits();
+        let Some(last_row) = commits.len().checked_sub(1) else {
             return;
         };
-        let selected_row = self.selected_entry_idx.and_then(|index| {
-            indices
-                .iter()
-                .position(|&visible_index| visible_index == index)
-        });
+        let selected_row = self
+            .selected_entry_idx
+            .and_then(|index| commits.row_of(index));
         let row = selected_row.map_or(0, |row| {
             if forward {
                 row.saturating_add(step).min(last_row)
@@ -2428,7 +2475,9 @@ impl GitGraph {
                 row.saturating_sub(step)
             }
         });
-        self.select_entry(indices[row], ScrollStrategy::Nearest, cx);
+        if let Some(index) = commits.get(row) {
+            self.select_entry(index, ScrollStrategy::Nearest, cx);
+        }
     }
 
     fn scroll_up(&mut self, _: &ScrollUp, window: &mut Window, cx: &mut Context<Self>) {
@@ -2657,11 +2706,7 @@ impl GitGraph {
         cx: &mut Context<Self>,
     ) {
         let visible_index = if self.only_show_search_results() {
-            let Some(row) = self
-                .visible_commit_indices()
-                .iter()
-                .position(|&index| index == idx)
-            else {
+            let Some(row) = self.visible_commits().row_of(idx) else {
                 return;
             };
             row
@@ -2846,7 +2891,20 @@ impl GitGraph {
             .get_repository(cx)
             .map(|repository| repository.read(cx).branch_list.to_vec())
             .unwrap_or_default();
+        self.rebuild_sidebar_trees();
         cx.notify();
+    }
+
+    fn rebuild_sidebar_trees(&mut self) {
+        let (local, remote): (Vec<_>, Vec<_>) = self
+            .sidebar_branches
+            .iter()
+            .cloned()
+            .partition(|branch| !branch.is_remote());
+        self.sidebar_local_tree = build_branch_tree(&local);
+        self.sidebar_remote_tree = build_branch_tree(&remote);
+        self.sidebar_local_branches = local;
+        self.sidebar_remote_branches = remote;
     }
 
     fn set_sidebar_log_source(&mut self, log_source: LogSource, cx: &mut Context<Self>) {
@@ -3032,20 +3090,10 @@ impl GitGraph {
     fn render_branch_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let border_variant = cx.theme().colors().border_variant;
         let selected_background = cx.theme().colors().ghost_element_selected;
-        let local_branches: Vec<Branch> = self
-            .sidebar_branches
-            .iter()
-            .filter(|branch| !branch.is_remote())
-            .cloned()
-            .collect();
-        let remote_branches: Vec<Branch> = self
-            .sidebar_branches
-            .iter()
-            .filter(|branch| branch.is_remote())
-            .cloned()
-            .collect();
-        let local_tree = build_branch_tree(&local_branches);
-        let remote_tree = build_branch_tree(&remote_branches);
+        let local_branches = &self.sidebar_local_branches;
+        let remote_branches = &self.sidebar_remote_branches;
+        let local_tree = &self.sidebar_local_tree;
+        let remote_tree = &self.sidebar_remote_tree;
         let all_commits_selected = matches!(self.log_source, LogSource::All);
         let all_commits_row = self
             .sidebar_row(
@@ -3090,17 +3138,12 @@ impl GitGraph {
                         "git-graph-sidebar-local-header",
                         i18n::t!("bf4ad761840fcd0a"),
                     ))
-                    .children(self.render_sidebar_tree("local", &local_tree, &local_branches, cx))
+                    .children(self.render_sidebar_tree("local", local_tree, local_branches, cx))
                     .child(sidebar_section_header(
                         "git-graph-sidebar-remote-header",
                         i18n::t!("7ba00927dde9122f"),
                     ))
-                    .children(self.render_sidebar_tree(
-                        "remote",
-                        &remote_tree,
-                        &remote_branches,
-                        cx,
-                    )),
+                    .children(self.render_sidebar_tree("remote", remote_tree, remote_branches, cx)),
             )
     }
 
@@ -3136,8 +3179,9 @@ impl GitGraph {
 
         if !self.only_show_search_results()
             || self
-                .visible_commit_indices()
-                .contains(&selected_entry_index)
+                .visible_commits()
+                .row_of(selected_entry_index)
+                .is_some()
         {
             self.open_commit_view(selected_entry_index, window, cx);
         }
@@ -5654,9 +5698,9 @@ impl Render for GitGraph {
             self.search(query, cx);
         }
         let (loaded_commit_count, is_loading) = self.commit_count_and_loading_state(cx);
-        let visible_commit_indices = self.visible_commit_indices();
+        let visible_commits = self.visible_commits();
         let commit_count = if self.only_show_search_results() {
-            visible_commit_indices.len()
+            visible_commits.len()
         } else {
             loaded_commit_count
         };
@@ -5823,7 +5867,7 @@ impl Render for GitGraph {
                                 .width_config(table_width_config)
                                 .column_filter(table_filter)
                                 .map_row(move |(visible_index, row), window, cx| {
-                                    let Some(&index) = visible_commit_indices.get(visible_index)
+                                    let Some(index) = visible_commits.get(visible_index)
                                     else {
                                         return row.into_any_element();
                                     };
@@ -6605,7 +6649,8 @@ impl GitGraph {
     }
 
     pub fn visible_commit_indices_for_test(&self) -> Vec<usize> {
-        self.visible_commit_indices()
+        let commits = self.visible_commits();
+        (0..commits.len()).filter_map(|row| commits.get(row)).collect()
     }
 
     pub fn search_matches_for_test(&self) -> Vec<Oid> {
@@ -9597,7 +9642,7 @@ mod tests {
                 .map(|index| graph.graph_data.commits[index].data.sha)
                 .into_iter()
                 .collect();
-            assert_eq!(graph.visible_commit_indices(), vec![1, 3, 5, 7]);
+            assert_eq!(graph.visible_commit_indices_for_test(), vec![1, 3, 5, 7]);
             graph.select_first(&SelectFirst, window, cx);
             assert_eq!(graph.selected_entry_idx, Some(1));
             graph.select_prev(&SelectPrevious, window, cx);

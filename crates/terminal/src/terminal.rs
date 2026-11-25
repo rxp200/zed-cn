@@ -920,6 +920,16 @@ const PERSISTENT_TERMINAL_HOSTED_ATTACHMENT_LOST: &[&str] = &[
 /// Delay between retries of a batch the server rejected because its input
 /// backlog was full.
 const INPUT_BACKLOG_RETRY_INTERVAL: Duration = Duration::from_millis(200);
+const INPUT_BACKLOG_MAX_RETRY_INTERVAL: Duration = Duration::from_secs(2);
+/// How long a stalled input batch may wait before it is reported as a warning
+/// instead of a debug log. Retrying continues; the batch is not dropped.
+const INPUT_BACKLOG_STALL_WARNING: Duration = Duration::from_secs(30);
+/// How often the reader polls for the child's exit status after both output
+/// streams closed.
+const CHILD_STATUS_POLL_INTERVAL: Duration = Duration::from_millis(20);
+/// The longest we wait for that status. A child that closed both streams but is
+/// still running must not keep the poll loop alive for the whole session.
+const CHILD_STATUS_TIMEOUT: Duration = Duration::from_secs(2);
 /// How much streamed remote-terminal output the client applies before
 /// reporting a new credit offset to the server.
 const OUTPUT_CREDIT_GRANULARITY_BYTES: u64 = 256 * 1024;
@@ -1075,6 +1085,7 @@ impl TerminalBuilder {
             completion_tx: None,
             term,
             term_config: config,
+            replay_osc52: None,
             output_processor: None,
             output_events_tx: Some(events_tx),
             output_generation: 0,
@@ -1452,6 +1463,7 @@ impl TerminalBuilder {
                 completion_tx,
                 term,
                 term_config: config,
+                replay_osc52: None,
                 output_processor: None,
                 output_events_tx: None,
                 output_generation: 0,
@@ -1910,6 +1922,12 @@ async fn send_persistent_terminal_input(
         // by the server, while typing during the round trip is coalesced here.
         let mut took_control = false;
         let mut accepted = false;
+        // The backlog only drains when the remote program reads stdin, which may
+        // take arbitrarily long. Back off so a stalled program cannot keep the
+        // client issuing a rejected RPC five times a second forever.
+        let mut backlog_retry_delay = INPUT_BACKLOG_RETRY_INTERVAL;
+        let mut backlog_stalled_since: Option<Instant> = None;
+        let mut backlog_warning_reported = false;
         loop {
             let result = client
                 .request(proto::PersistentTerminalInput {
@@ -1930,10 +1948,25 @@ async fn send_persistent_terminal_input(
                     // backlog is full. It did not record this sequence, so retry
                     // the same batch once the program drains the backlog instead
                     // of permanently disabling terminal input.
-                    log::debug!(
-                        "persistent terminal input waiting for remote backlog space: {error:#}"
-                    );
-                    executor.timer(INPUT_BACKLOG_RETRY_INTERVAL).await;
+                    let stalled_since = *backlog_stalled_since.get_or_insert_with(Instant::now);
+                    if !backlog_warning_reported
+                        && stalled_since.elapsed() >= INPUT_BACKLOG_STALL_WARNING
+                    {
+                        backlog_warning_reported = true;
+                        log::warn!(
+                            "persistent terminal input has been waiting {:?} for remote backlog space; \
+                             later keystrokes may be dropped until the remote program reads stdin",
+                            stalled_since.elapsed()
+                        );
+                    } else {
+                        log::debug!(
+                            "persistent terminal input waiting for remote backlog space: {error:#}"
+                        );
+                    }
+                    executor.timer(backlog_retry_delay).await;
+                    backlog_retry_delay = backlog_retry_delay
+                        .saturating_mul(2)
+                        .min(INPUT_BACKLOG_MAX_RETRY_INTERVAL);
                 }
                 Err(error) if persistent_terminal_session_ended(&error) => {
                     log::debug!("hosted terminal session ended before input: {error:#}");
@@ -2084,6 +2117,9 @@ pub struct Terminal {
     completion_tx: Option<Sender<Option<ExitStatus>>>,
     term: Arc<AlacrittyTermLock>,
     term_config: AlacrittyTermConfig,
+    /// Original OSC52 setting while replayed history is being written, so the
+    /// replay cannot put remote output on the local clipboard.
+    replay_osc52: Option<Osc52>,
     output_processor: Option<Processor<StdSyncHandler>>,
     output_events_tx: Option<futures::channel::mpsc::UnboundedSender<PtyEvent>>,
     output_generation: u64,
@@ -2899,16 +2935,20 @@ impl Terminal {
     }
 
     fn write_remote_output(&mut self, bytes: &[u8], replay: bool, cx: &mut Context<Self>) {
-        let osc52 = self.term_config.osc52;
+        // A replay region spans many frames. Toggle OSC52 once for the region
+        // instead of cloning and re-applying the whole terminal config twice per
+        // frame; the next live frame restores it before it is processed.
         if replay {
-            self.term_config.osc52 = Osc52::Disabled;
-            apply_config(&self.term, &self.term_config);
-        }
-        self.write_raw_output(bytes, cx);
-        if replay {
+            if self.replay_osc52.is_none() {
+                self.replay_osc52 = Some(self.term_config.osc52);
+                self.term_config.osc52 = Osc52::Disabled;
+                apply_config(&self.term, &self.term_config);
+            }
+        } else if let Some(osc52) = self.replay_osc52.take() {
             self.term_config.osc52 = osc52;
             apply_config(&self.term, &self.term_config);
         }
+        self.write_raw_output(bytes, cx);
     }
 
     /// Terminal byte streams already contain their control sequences and must not be normalized.
@@ -4638,7 +4678,10 @@ fn spawn_task_subprocess(
             futures::future::join(pump(stdout), pump(stderr)).await;
 
             // Both pipes are closed, so the child has exited or is about to.
-            // Poll for its status without holding the lock across an await.
+            // Poll for its status without holding the lock across an await, but
+            // bound the wait: a child can close both streams and keep running,
+            // which would otherwise wake this task 50 times a second forever.
+            let status_started = Instant::now();
             let status = loop {
                 let status = match child.lock().as_mut() {
                     Some(child) => match child.try_status() {
@@ -4652,7 +4695,15 @@ fn spawn_task_subprocess(
                 };
                 match status {
                     Some(status) => break Some(status),
-                    None => executor.timer(Duration::from_millis(20)).await,
+                    None if status_started.elapsed() >= CHILD_STATUS_TIMEOUT => {
+                        log::debug!(
+                            "subprocess closed its output streams but did not exit within {:?}; \
+                             treating it as exited",
+                            CHILD_STATUS_TIMEOUT
+                        );
+                        break None;
+                    }
+                    None => executor.timer(CHILD_STATUS_POLL_INTERVAL).await,
                 }
             };
             child.lock().take();

@@ -1766,15 +1766,21 @@ impl SshRemoteConnection {
         let output = child.output().fuse();
         futures::pin_mut!(output);
         let started_at = Instant::now();
+        // Every progress probe opens its own SSH command channel, which competes
+        // with the upload itself. Start fast enough to show movement, then back
+        // off so a long upload is not polled four times a second for minutes.
+        let mut poll_interval = Duration::from_millis(500);
+        let max_poll_interval = Duration::from_secs(5);
         loop {
             select_biased! {
                 output = output => return Ok(output?),
-                _ = cx.background_executor().timer(Duration::from_millis(250)).fuse() => {
+                _ = cx.background_executor().timer(poll_interval).fuse() => {
                     anyhow::ensure!(
                         started_at.elapsed() < REMOTE_SERVER_UPLOAD_TOTAL_TIMEOUT,
                         "uploading remote development server timed out after {:?}",
                         REMOTE_SERVER_UPLOAD_TOTAL_TIMEOUT
                     );
+                    poll_interval = (poll_interval * 2).min(max_poll_interval);
                     if total_bytes == 0 {
                         continue;
                     }

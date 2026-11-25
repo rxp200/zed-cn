@@ -5776,5 +5776,12 @@
   "aec2f93d67b7c4c5": "Worktrees",
   "dddb3c22c0dc474c": "Import into current project",
   "826d559b677b5f71": "The remote server cannot list every file; contents of ignored directories may be skipped",
-  "1ef0173389d50d3c": "Failed to list remote files: {error}"
+  "1ef0173389d50d3c": "Failed to list remote files: {error}",
+  "14934434d409b13a": "Editable",
+  "23e39291d6135814": "Saving…",
+  "2c07997249abaa76": "Failed to save",
+  "6373a00b628161b3": "Editing remote files is not supported yet",
+  "5753c2aaae322cd3": "Translation request timed out",
+  "3e8105ce7d84f593": "The translation response timed out",
+  "b7a615b6fe929502": "The translation output exceeds the length limit"
 }

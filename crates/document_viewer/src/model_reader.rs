@@ -591,7 +591,7 @@ impl ModelReader {
                 file_size,
             )
         };
-        log::info!(
+        log::debug!(
             "[open-debug] ModelReader::new format={} triangles={}",
             format,
             mesh.triangles.len()
@@ -672,7 +672,7 @@ impl ModelReader {
             };
             (format, file_size)
         };
-        log::info!(
+        log::debug!(
             "[open-debug] ModelReader::reload format={} triangles={}",
             format,
             mesh.triangles.len()
@@ -1002,7 +1002,7 @@ impl ModelReader {
         });
         let dimensions = self.dimensions;
         if self.image.is_none() {
-            log::info!(
+            log::debug!(
                 "[open-debug] ModelReader first render dimensions={:?} triangles={}",
                 dimensions,
                 self.mesh.triangles.len()
@@ -3135,7 +3135,7 @@ fn rasterize(
         pixel.swap(0, 2);
     }
     let image = image::RgbaImage::from_raw(width, height, pixels)?;
-    log::info!("[open-debug] ModelReader rasterized {width}x{height}");
+    log::debug!("[open-debug] ModelReader rasterized {width}x{height}");
     Some(RenderedModel {
         image: Arc::new(RenderImage::new(smallvec::smallvec![image::Frame::new(
             image

@@ -36,6 +36,7 @@ use markdown::Markdown;
 use multi_buffer::MultiBufferOffset;
 use project::{HoverBlock, HoverBlockKind};
 use settings::{RegisterSetting, Settings, SettingsContent};
+use std::collections::VecDeque;
 use std::{
     cell::{Cell, RefCell},
     hash::{Hash, Hasher},
@@ -326,10 +327,49 @@ pub struct TranslationService {
     /// Completed translations for the current session, keyed by the cache key
     /// (route:target_language:text-hash).
     cache: HashMap<String, SharedString>,
+    /// Insertion order of [`Self::cache`], so the session cache stays bounded
+    /// instead of holding every translation for the lifetime of the process.
+    cache_order: VecDeque<String>,
     /// Requests that are still running, keyed by the cache key.
     in_flight: HashMap<String, InFlightTranslation>,
     /// Persistent cache reused across sessions, when `cache_persist` is set.
     pub(crate) disk_cache: TranslationDiskCache,
+}
+
+/// Upper bound for the session translation cache. Disk-cached translations are
+/// reloaded on demand, so evicting them costs a file read, not a model request.
+const MAX_SESSION_TRANSLATIONS: usize = 512;
+
+/// Longest a translation request (and each streamed chunk) may take before it is
+/// abandoned, so a stalled provider cannot block the in-flight entry forever.
+const TRANSLATION_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+const TRANSLATION_CHUNK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+const TRANSLATION_MAX_OUTPUT_BYTES: usize = 32 * 1024;
+const TRANSLATION_MAX_CHUNKS: usize = 8192;
+
+fn remember_translation(
+    cache: &mut HashMap<String, SharedString>,
+    order: &mut VecDeque<String>,
+    key: String,
+    translation: SharedString,
+) {
+    if cache.insert(key.clone(), translation).is_none() {
+        order.push_back(key);
+    }
+    while cache.len() > MAX_SESSION_TRANSLATIONS {
+        let Some(oldest) = order.pop_front() else {
+            break;
+        };
+        cache.remove(&oldest);
+    }
+}
+
+fn touch_translation(order: &mut VecDeque<String>, key: &str) {
+    if let Some(position) = order.iter().position(|entry| entry == key) {
+        if let Some(entry) = order.remove(position) {
+            order.push_back(entry);
+        }
+    }
 }
 
 /// Returns the cache key for a translation: the route and target language,
@@ -371,6 +411,7 @@ impl TranslationService {
             .detach();
             Self {
                 cache: HashMap::default(),
+                cache_order: VecDeque::default(),
                 in_flight: HashMap::default(),
                 disk_cache: TranslationDiskCache::new(path.clone(), max_bytes, persist),
             }
@@ -420,6 +461,9 @@ impl TranslationService {
 
         // Fast in-memory hit.
         if let Some(cached) = service.read(cx).cache.get(&key).cloned() {
+            service.update(cx, |service, _| {
+                touch_translation(&mut service.cache_order, &key);
+            });
             if persist {
                 service.update(cx, |service, cx| {
                     service.disk_cache.record_view(&key);
@@ -433,7 +477,12 @@ impl TranslationService {
         if persist {
             let disk_hit = service.update(cx, |service, cx| {
                 let translation = service.disk_cache.get(&key)?.translation.clone();
-                service.cache.insert(key.clone(), translation.clone());
+                remember_translation(
+                    &mut service.cache,
+                    &mut service.cache_order,
+                    key.clone(),
+                    translation.clone(),
+                );
                 service.disk_cache.record_view(&key);
                 service.disk_cache.schedule_save(cx);
                 Some(translation)
@@ -479,7 +528,12 @@ impl TranslationService {
                 let disk_hit = this
                     .update(cx, |service, cx| {
                         let translation = service.disk_cache.get(&key)?.translation.clone();
-                        service.cache.insert(key.clone(), translation.clone());
+                        remember_translation(
+                            &mut service.cache,
+                            &mut service.cache_order,
+                            key.clone(),
+                            translation.clone(),
+                        );
                         service.disk_cache.record_view(&key);
                         service.disk_cache.schedule_save(cx);
                         Some(translation)
@@ -510,7 +564,12 @@ impl TranslationService {
                 this.update(cx, |service, cx| {
                     if let Some(in_flight) = service.in_flight.remove(&key) {
                         if let Ok(translation) = &result {
-                            service.cache.insert(key.clone(), translation.clone());
+                            remember_translation(
+                                &mut service.cache,
+                                &mut service.cache_order,
+                                key.clone(),
+                                translation.clone(),
+                            );
                             service.disk_cache.store(&key, translation.clone());
                             service.disk_cache.schedule_save(cx);
                         }
@@ -629,15 +688,39 @@ async fn request_translation(
         ..Default::default()
     };
 
+    use gpui::FutureExt as _;
+    let executor = cx.background_executor().clone();
     let mut stream = model
         .provider
         .stream_completion_text(&model.model, request, cx)
+        .with_timeout(TRANSLATION_REQUEST_TIMEOUT, &executor)
         .await
+        .context(i18n::t!("5753c2aaae322cd3"))?
         .map_err(|err| anyhow::anyhow!(err.to_string()))?;
     let mut translation = String::new();
-    while let Some(chunk) = stream.stream.next().await {
-        let chunk = chunk.map_err(|err| anyhow::anyhow!(err.to_string()))?;
-        translation.push_str(&chunk);
+    let started = std::time::Instant::now();
+    let mut chunks = 0usize;
+    while let Some(chunk) = stream
+        .stream
+        .next()
+        .with_timeout(TRANSLATION_CHUNK_TIMEOUT, &executor)
+        .await
+        .context(i18n::t!("3e8105ce7d84f593"))?
+    {
+        anyhow::ensure!(
+            started.elapsed() < TRANSLATION_REQUEST_TIMEOUT,
+            i18n::t!("5753c2aaae322cd3")
+        );
+        chunks += 1;
+        anyhow::ensure!(
+            chunks <= TRANSLATION_MAX_CHUNKS,
+            i18n::t!("b7a615b6fe929502")
+        );
+        translation.push_str(&chunk.map_err(|err| anyhow::anyhow!(err.to_string()))?);
+        anyhow::ensure!(
+            translation.len() <= TRANSLATION_MAX_OUTPUT_BYTES,
+            i18n::t!("b7a615b6fe929502")
+        );
     }
     let translation = translation.trim();
     anyhow::ensure!(!translation.is_empty(), i18n::t!("0d88845ca53c345e"));
@@ -745,6 +828,36 @@ mod tests {
                 });
             });
         });
+    }
+
+    #[test]
+    fn session_cache_evicts_oldest_translations() {
+        let mut cache = HashMap::default();
+        let mut order = VecDeque::new();
+        for index in 0..MAX_SESSION_TRANSLATIONS + 10 {
+            remember_translation(
+                &mut cache,
+                &mut order,
+                format!("key-{index}"),
+                SharedString::from(format!("translation {index}")),
+            );
+        }
+        assert_eq!(cache.len(), MAX_SESSION_TRANSLATIONS);
+        assert_eq!(order.len(), MAX_SESSION_TRANSLATIONS);
+        assert!(!cache.contains_key("key-0"), "oldest entry is evicted");
+        assert!(cache.contains_key(&format!("key-{}", MAX_SESSION_TRANSLATIONS + 9)));
+
+        // Re-inserting an existing key must not grow the order bookkeeping.
+        remember_translation(
+            &mut cache,
+            &mut order,
+            "key-15".to_string(),
+            SharedString::from("updated"),
+        );
+        assert_eq!(order.len(), MAX_SESSION_TRANSLATIONS);
+        // A cache hit moves the key to the back, so it survives the next eviction.
+        touch_translation(&mut order, "key-15");
+        assert_eq!(order.back().map(String::as_str), Some("key-15"));
     }
 
     #[test]

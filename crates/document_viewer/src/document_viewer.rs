@@ -10,6 +10,7 @@ mod model_section;
 mod pdf_reader;
 mod step_reader;
 mod word_reader;
+mod xlsx_writer;
 
 use std::{
     path::{Path, PathBuf},
@@ -145,7 +146,7 @@ impl DocumentItem {
         let Some(format) = DocumentFormat::from_extension(&extension) else {
             return Task::ready(Err(anyhow!("unsupported document format")));
         };
-        log::info!(
+        log::debug!(
             "[open-debug] DocumentItem::open {:?} format={format:?}",
             project_path.path.as_unix_str()
         );
@@ -388,6 +389,12 @@ impl DocumentItem {
         }
     }
 
+    /// Re-reads the file after this item's reader wrote it, so the preview
+    /// shows the saved bytes instead of waiting for the worktree watcher.
+    pub fn reload_from_disk(&mut self, cx: &mut Context<Self>) {
+        self.reload(cx);
+    }
+
     fn reload_bytes(&mut self, cx: &mut Context<Self>) {
         let path = self.project_path(cx);
         let Some(extension) = self.project.read(cx).document_extension(&path, cx) else {
@@ -476,7 +483,7 @@ impl project::ProjectItem for DocumentItem {
         cx: &mut App,
     ) -> Option<Task<Result<Entity<Self>>>> {
         DocumentFormat::from_extension(&project.read(cx).document_extension(path, cx)?)?;
-        log::info!(
+        log::debug!(
             "[open-debug] DocumentItem::try_open {:?}",
             path.path.as_unix_str()
         );
@@ -510,12 +517,12 @@ async fn parse_document_payload(
 )> {
     match format {
         DocumentFormat::Model => {
-            log::info!(
+            log::debug!(
                 "[open-debug] parsing model {extension} ({} bytes)",
                 content.len()
             );
             let mesh = model_mesh::ModelMesh::parse(&extension, &content)?;
-            log::info!(
+            log::debug!(
                 "[open-debug] model parsed: {} triangles",
                 mesh.triangles.len()
             );
@@ -526,13 +533,13 @@ async fn parse_document_payload(
         // reader cannot draw. The content decides the format so a DWG renamed
         // to `.dxf` (or the reverse) still opens.
         DocumentFormat::Cad => {
-            log::info!("[open-debug] parsing drawing ({} bytes)", content.len());
+            log::debug!("[open-debug] parsing drawing ({} bytes)", content.len());
             let scene = if cad_dwg::is_dwg(&content) {
                 cad_dwg::parse(&content)?
             } else {
                 cad_dxf::parse(&content)?
             };
-            log::info!(
+            log::debug!(
                 "[open-debug] drawing parsed: {} paths, {} fills, {} texts",
                 scene.paths.len(),
                 scene.fills.len(),
@@ -541,7 +548,7 @@ async fn parse_document_payload(
             Ok((Vec::new(), None, Some(Arc::new(scene))))
         }
         _ => {
-            log::info!("[open-debug] document loaded ({} bytes)", content.len());
+            log::debug!("[open-debug] document loaded ({} bytes)", content.len());
             Ok((content, None, None))
         }
     }
@@ -583,7 +590,7 @@ impl DocumentView {
         cx: &mut Context<Self>,
     ) -> Self {
         let format = item.read(cx).format;
-        log::info!("[open-debug] DocumentView::new format={format:?}");
+        log::debug!("[open-debug] DocumentView::new format={format:?}");
 
         let subscriptions = vec![cx.subscribe_in(
             &item,
@@ -2168,6 +2175,163 @@ mod tests {
                 assert!(reader.error.is_none());
             }
             _ => panic!("expected spreadsheet reader"),
+        });
+    }
+
+    /// Two edits committed before the first write finishes must both survive:
+    /// the second write patches the bytes the first one produced.
+    #[gpui::test]
+    async fn test_consecutive_spreadsheet_edits_both_persist(cx: &mut TestAppContext) {
+        init_test(cx);
+        let (project, item) =
+            open_test_document(cx, "data.xlsx", crate::excel_reader::tests::minimal_xlsx()).await;
+        let (view, cx) =
+            cx.add_window_view(|window, cx| DocumentView::new(item, project.clone(), window, cx));
+        cx.run_until_parked();
+
+        view.update(cx, |view, cx| {
+            let DocumentChild::Spreadsheet(reader) = &view.child else {
+                panic!("expected spreadsheet reader");
+            };
+            reader.update(cx, |reader, cx| {
+                reader.apply_cell_edit_for_test(1, 1, "7", cx);
+                reader.apply_cell_edit_for_test(0, 1, "6", cx);
+            });
+        });
+        cx.run_until_parked();
+        cx.run_until_parked();
+
+        let saved = project
+            .read_with(cx, |project, _| {
+                project.fs().as_fake().read_file_sync("/root/data.xlsx")
+            })
+            .expect("the edited workbook should be on disk");
+        use calamine::Reader as _;
+        let mut workbook = calamine::open_workbook_auto_from_rs(std::io::Cursor::new(saved))
+            .expect("readable xlsx");
+        let range = workbook.worksheet_range("数据").expect("data sheet");
+        assert_eq!(
+            range.get_value((0, 1)).map(|value| value.to_string()),
+            Some("6".to_owned())
+        );
+        assert_eq!(
+            range.get_value((1, 1)).map(|value| value.to_string()),
+            Some("7".to_owned())
+        );
+    }
+
+    /// The spreadsheet preview has an Excel-shaped chrome: a toolbar, sheet
+    /// tabs along the bottom, and a status bar that carries the cell cursor.
+    #[gpui::test]
+    async fn test_spreadsheet_preview_has_excel_layout(cx: &mut TestAppContext) {
+        init_test(cx);
+        let (project, item) =
+            open_test_document(cx, "data.xlsx", crate::excel_reader::tests::minimal_xlsx()).await;
+        let (view, window) =
+            cx.add_window_view(|window, cx| DocumentView::new(item, project, window, cx));
+        window.run_until_parked();
+
+        for selector in ["excel-toolbar", "excel-sheet-tabs", "excel-status-bar"] {
+            assert!(
+                window.debug_bounds(selector).is_some(),
+                "spreadsheet layout should render {selector}"
+            );
+        }
+        let tabs = window.debug_bounds("excel-sheet-tabs").expect("sheet tabs");
+        let status = window.debug_bounds("excel-status-bar").expect("status bar");
+        assert!(tabs.size.height > gpui::px(0.) && status.size.height > gpui::px(0.));
+        assert!(
+            tabs.origin.x < status.origin.x,
+            "sheet tabs sit at the left of the status bar: tabs={tabs:?} status={status:?}"
+        );
+        view.read_with(&mut *window, |view, _| {
+            assert!(matches!(view.child, DocumentChild::Spreadsheet(_)));
+        });
+    }
+
+    /// Word documents render on a bounded "page" instead of bleeding across the
+    /// whole window.
+    #[gpui::test]
+    async fn test_word_preview_uses_a_page_layout(cx: &mut TestAppContext) {
+        init_test(cx);
+        let (_, project, project_path) = test_document_project_with_fs(
+            cx,
+            "notes.docx",
+            crate::word_reader::tests::docx_fixture(),
+        )
+        .await;
+        let item = cx
+            .update(|cx| DocumentItem::open(project.clone(), project_path, cx))
+            .await
+            .expect("word document should open");
+        let (view, window) =
+            cx.add_window_view(|window, cx| DocumentView::new(item, project, window, cx));
+        window.run_until_parked();
+
+        let page = window.debug_bounds("word-page").expect("word page");
+        assert!(
+            page.size.width > gpui::px(320.),
+            "page should use the reading measure: {page:?}"
+        );
+        assert!(
+            page.size.width <= gpui::px(920.),
+            "page should stay bounded: {page:?}"
+        );
+        view.read_with(&mut *window, |view, _| {
+            assert!(matches!(view.child, DocumentChild::Word(_)));
+        });
+    }
+
+    /// Editing a cell writes the workbook through the project filesystem and
+    /// the preview re-reads the saved bytes.
+    #[gpui::test]
+    async fn test_editing_a_spreadsheet_cell_saves_the_workbook(cx: &mut TestAppContext) {
+        init_test(cx);
+        let (project, item) =
+            open_test_document(cx, "data.xlsx", crate::excel_reader::tests::minimal_xlsx()).await;
+
+        let (view, cx) =
+            cx.add_window_view(|window, cx| DocumentView::new(item, project.clone(), window, cx));
+        cx.run_until_parked();
+
+        view.update(cx, |view, cx| {
+            let DocumentChild::Spreadsheet(reader) = &view.child else {
+                panic!("expected spreadsheet reader");
+            };
+            assert!(
+                reader.read(cx).is_writable_for_test(),
+                "xlsx workbooks are writable"
+            );
+            reader.update(cx, |reader, cx| {
+                reader.apply_cell_edit_for_test(1, 1, "7", cx);
+            });
+        });
+        cx.run_until_parked();
+        cx.run_until_parked();
+
+        let saved = project.read_with(cx, |project, _| {
+            project.fs().as_fake().read_file_sync("/root/data.xlsx")
+        });
+        let saved = saved.expect("the edited workbook should be on disk");
+        use calamine::Reader as _;
+        let mut workbook = calamine::open_workbook_auto_from_rs(std::io::Cursor::new(saved))
+            .expect("readable xlsx");
+        let range = workbook.worksheet_range("数据").expect("data sheet");
+        assert_eq!(
+            range.get_value((1, 1)).map(|value| value.to_string()),
+            Some("7".to_owned()),
+            "B2 should hold the edited value"
+        );
+
+        view.read_with(cx, |view, cx| {
+            let DocumentChild::Spreadsheet(reader) = &view.child else {
+                panic!("expected spreadsheet reader");
+            };
+            assert_eq!(
+                reader.read(cx).cell_text_for_test(1, 1).as_deref(),
+                Some("7"),
+                "the preview should show the saved value"
+            );
         });
     }
 

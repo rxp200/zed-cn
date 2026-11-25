@@ -223,6 +223,89 @@ fn reconnect_delay(attempt: usize) -> Duration {
         .min(MAX_RECONNECT_DELAY)
 }
 
+/// A transport that stays usable at least this long counts as a recovered
+/// connection. Anything shorter is flapping: the server can accept a transport
+/// and drop it again seconds later (for example while another client keeps
+/// taking the same session over), and treating that as success would restart
+/// the attempt count at 1 and retry forever at the minimum delay.
+const STABLE_CONNECTION_DURATION: Duration = Duration::from_secs(60);
+
+/// Every reconnect spawns another ssh process, so a connection that keeps
+/// coming back and dying has to be abandoned well before the full retry budget
+/// of a plain network outage is spent. Eight short-lived reconnects is enough
+/// to prove the session cannot be held, and keeps the retries (and the console
+/// windows they may open on Windows) to a couple of minutes.
+const MAX_FLAPPING_RECONNECT_ATTEMPTS: usize = 8;
+
+/// Attempt accounting for the current outage, independent of any single
+/// transport's lifetime.
+struct ReconnectAttempts {
+    attempts: usize,
+    flapping: usize,
+    connected_at: Option<Instant>,
+}
+
+impl ReconnectAttempts {
+    fn new() -> Self {
+        Self {
+            attempts: 0,
+            flapping: 0,
+            connected_at: None,
+        }
+    }
+
+    /// Records that a transport became ready. The attempt count is only reset
+    /// once the connection proves stable, so a reconnect that immediately dies
+    /// is treated as a continuation of the same outage.
+    fn connected(&mut self, now: Instant) {
+        self.connected_at = Some(now);
+    }
+
+    fn next(&mut self, now: Instant) -> usize {
+        if let Some(at) = self.connected_at.take() {
+            if now.saturating_duration_since(at) >= STABLE_CONNECTION_DURATION {
+                self.attempts = 0;
+                self.flapping = 0;
+            } else {
+                self.flapping = self.flapping.saturating_add(1);
+            }
+        }
+        self.attempts = self.attempts.saturating_add(1);
+        self.attempts
+    }
+
+    /// Number of reconnects in this outage that succeeded and then died before
+    /// `STABLE_CONNECTION_DURATION` elapsed.
+    fn flapping_reconnects(&self) -> usize {
+        self.flapping
+    }
+
+    /// Returns why automatic reconnection has to stop, if it does.
+    fn exhaustion(&self) -> Option<ReconnectExhaustion> {
+        if self.flapping > MAX_FLAPPING_RECONNECT_ATTEMPTS {
+            Some(ReconnectExhaustion::Flapping)
+        } else if self.attempts > MAX_RECONNECT_ATTEMPTS {
+            Some(ReconnectExhaustion::Attempts)
+        } else {
+            None
+        }
+    }
+
+    /// Used when the user asks for a manual reconnect: that is a new outage by
+    /// definition, not a continuation of the automatic retry sequence.
+    fn reset(&mut self) {
+        *self = Self::new();
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum ReconnectExhaustion {
+    /// The retry budget ran out.
+    Attempts,
+    /// Transports kept being accepted and then lost again.
+    Flapping,
+}
+
 enum State {
     Connecting,
     Connected {
@@ -402,6 +485,7 @@ pub struct RemoteClient {
     reconnect_status: Option<String>,
     manual_reconnect: bool,
     connection_generation: u64,
+    reconnect_attempts: ReconnectAttempts,
 }
 
 #[derive(Debug)]
@@ -638,6 +722,7 @@ impl RemoteClient {
                     reconnect_status: None,
                     manual_reconnect: false,
                     connection_generation: 0,
+                    reconnect_attempts: ReconnectAttempts::new(),
                 });
 
                 let session_invalidated = client.session_invalidated.wait();
@@ -762,6 +847,7 @@ impl RemoteClient {
                         multiplex_task,
                         heartbeat_task,
                     });
+                    this.reconnect_attempts.connected(Instant::now());
                 });
 
                 // Use the same `remote_*` property schema as the forwarded
@@ -861,7 +947,7 @@ impl RemoteClient {
             self.manual_reconnect = false;
         }
         let state = self.state.take().unwrap();
-        let (attempts, remote_connection, delegate) = match state {
+        let (remote_connection, delegate) = match state {
             State::Connected {
                 remote_connection,
                 delegate,
@@ -877,26 +963,36 @@ impl RemoteClient {
             } => {
                 drop(multiplex_task);
                 drop(heartbeat_task);
-                (0, remote_connection, delegate)
+                (remote_connection, delegate)
             }
             State::ReconnectFailed {
-                attempts,
                 remote_connection,
                 delegate,
                 ..
-            } => (attempts, remote_connection, delegate),
+            } => (remote_connection, delegate),
             State::Connecting
             | State::Reconnecting
             | State::ReconnectExhausted
             | State::ServerNotRunning => unreachable!(),
         };
 
-        let attempts = attempts.saturating_add(1);
-        if attempts > MAX_RECONNECT_ATTEMPTS {
-            log::error!(
-                "Failed to reconnect after {} attempts, giving up",
-                MAX_RECONNECT_ATTEMPTS
-            );
+        let attempts = self.reconnect_attempts.next(Instant::now());
+        if let Some(exhaustion) = self.reconnect_attempts.exhaustion() {
+            match exhaustion {
+                ReconnectExhaustion::Flapping => {
+                    log::error!(
+                        "Remote transports kept dying within {STABLE_CONNECTION_DURATION:?} of reconnecting; \
+                         giving up after {} short-lived reconnects",
+                        self.reconnect_attempts.flapping_reconnects()
+                    );
+                }
+                ReconnectExhaustion::Attempts => {
+                    log::error!(
+                        "Failed to reconnect after {} attempts, giving up",
+                        MAX_RECONNECT_ATTEMPTS
+                    );
+                }
+            }
             self.set_state(State::ReconnectExhausted, cx);
             return Ok(());
         }
@@ -1121,6 +1217,9 @@ impl RemoteClient {
                 this.reconnect_cancellation.take();
                 let reconnected = this.state_is(State::is_reconnecting)
                     && matches!(&new_state, State::Connected { .. });
+                if reconnected {
+                    this.reconnect_attempts.connected(Instant::now());
+                }
                 this.try_set_state(cx, |old_state| {
                     if old_state.is_reconnecting() {
                         match &new_state {
@@ -1307,7 +1406,9 @@ impl RemoteClient {
                             }
                         }
                     } else {
-                        log::error!("proxy process terminated unexpectedly: {exit_code}");
+                        log::error!(
+                            "proxy process terminated unexpectedly: {exit_code} (transport generation {generation})"
+                        );
                         this.update(cx, |this, cx| {
                             if !this.state_is(State::is_reconnecting) {
                                 this.reconnect(cx).log_err();
@@ -1699,6 +1800,7 @@ impl RemoteClient {
         match self.connection_state() {
             ConnectionState::HeartbeatMissed => {
                 self.manual_reconnect = true;
+                self.reconnect_attempts.reset();
                 self.reconnect(cx)
             }
             ConnectionState::Reconnecting => {
@@ -1710,6 +1812,7 @@ impl RemoteClient {
                     .send(())
                     .map_err(|_| anyhow!("active reconnect attempt already completed"))?;
                 self.manual_reconnect = true;
+                self.reconnect_attempts.reset();
                 self.set_reconnect_status(i18n::t!("91c3abeadad40be2").into(), cx);
                 Ok(())
             }
@@ -1934,6 +2037,7 @@ impl RemoteClient {
                 reconnect_status: None,
                 manual_reconnect: false,
                 connection_generation: 0,
+                reconnect_attempts: ReconnectAttempts::new(),
             }
         })
     }
@@ -3559,6 +3663,117 @@ mod customized_tests {
         assert_eq!(
             reconnect_delay(MAX_RECONNECT_ATTEMPTS),
             Duration::from_secs(30)
+        );
+    }
+
+    #[test]
+    fn flapping_reconnects_keep_escalating_instead_of_restarting_at_attempt_one() {
+        let start = Instant::now();
+        let mut attempts = ReconnectAttempts::new();
+
+        // First transport is accepted and dropped nine seconds later.
+        attempts.connected(start);
+        assert_eq!(attempts.next(start + Duration::from_secs(9)), 1);
+
+        // The next attempt reconnects successfully, but only for seventeen
+        // seconds. That is still the same outage, so the attempt counter has to
+        // keep growing instead of restarting at the minimum delay.
+        attempts.connected(start + Duration::from_secs(30));
+        assert_eq!(attempts.next(start + Duration::from_secs(47)), 2);
+    }
+
+    #[test]
+    fn a_storm_of_short_lived_reconnects_is_abandoned_quickly() {
+        let start = Instant::now();
+        let mut attempts = ReconnectAttempts::new();
+        let mut now = start;
+
+        let mut cycles = 0;
+        while attempts.exhaustion().is_none() {
+            cycles += 1;
+            assert!(cycles <= MAX_RECONNECT_ATTEMPTS, "storm must be abandoned");
+
+            attempts.connected(now);
+            now += Duration::from_secs(9);
+            assert_eq!(
+                attempts.next(now),
+                cycles,
+                "every short-lived reconnect is another attempt"
+            );
+            now += Duration::from_secs(1);
+        }
+
+        assert_eq!(attempts.exhaustion(), Some(ReconnectExhaustion::Flapping));
+        assert_eq!(
+            attempts.flapping_reconnects(),
+            MAX_FLAPPING_RECONNECT_ATTEMPTS + 1,
+            "the storm is cut off shortly after the flapping threshold"
+        );
+        assert!(
+            attempts.flapping_reconnects() < MAX_RECONNECT_ATTEMPTS,
+            "flapping must not drain the full outage budget"
+        );
+    }
+
+    #[test]
+    fn an_outage_without_any_transport_still_uses_the_full_attempt_budget() {
+        let start = Instant::now();
+        let mut attempts = ReconnectAttempts::new();
+
+        for attempt in 1..=MAX_RECONNECT_ATTEMPTS {
+            assert_eq!(
+                attempts.next(start + Duration::from_secs(attempt as u64)),
+                attempt
+            );
+            assert_eq!(
+                attempts.exhaustion(),
+                None,
+                "a failing network keeps retrying up to the attempt limit"
+            );
+        }
+
+        assert_eq!(
+            attempts.next(start + Duration::from_secs(100)),
+            MAX_RECONNECT_ATTEMPTS + 1
+        );
+        assert_eq!(attempts.exhaustion(), Some(ReconnectExhaustion::Attempts));
+        assert_eq!(attempts.flapping_reconnects(), 0);
+    }
+
+    #[test]
+    fn a_stable_connection_starts_the_next_outage_at_attempt_one() {
+        let start = Instant::now();
+        let mut attempts = ReconnectAttempts::new();
+        attempts.connected(start);
+        assert_eq!(attempts.next(start + Duration::from_secs(9)), 1);
+        assert_eq!(attempts.next(start + Duration::from_secs(20)), 2);
+
+        attempts.connected(start + Duration::from_secs(30));
+        assert_eq!(
+            attempts.next(start + Duration::from_secs(30) + STABLE_CONNECTION_DURATION),
+            1,
+            "a transport that survived the stability window begins a new outage"
+        );
+        assert_eq!(attempts.flapping_reconnects(), 0);
+        assert_eq!(attempts.exhaustion(), None);
+    }
+
+    #[test]
+    fn manual_reconnect_restarts_the_backoff_sequence() {
+        let start = Instant::now();
+        let mut attempts = ReconnectAttempts::new();
+        attempts.connected(start);
+        for _ in 0..4 {
+            attempts.next(start + Duration::from_secs(9));
+        }
+        assert_eq!(attempts.next(start + Duration::from_secs(10)), 5);
+
+        attempts.reset();
+        attempts.connected(start + Duration::from_secs(11));
+        assert_eq!(
+            attempts.next(start + Duration::from_secs(20)),
+            1,
+            "manual reconnects are a new outage, not a continuation of the retries"
         );
     }
 

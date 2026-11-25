@@ -1066,7 +1066,10 @@ async fn verify_managed_ssh_key_blocking(key_id: &str) -> Result<()> {
         anyhow::bail!(i18n::t!("bd1be775e40703b6"));
     }
 
-    let mut command = smol::process::Command::new("ssh");
+    // SSH is a console-subsystem program on Windows, so it has to go through
+    // `util::command` to inherit `CREATE_NO_WINDOW`; a bare
+    // `smol::process::Command` opens a terminal window for this check.
+    let mut command = util::command::new_command("ssh");
     command.args(verification_arguments(&key, &private_key_path));
     let output = command
         .output()

@@ -221,6 +221,21 @@ impl TableView {
         });
     }
 
+    /// Sets the width of every data column; the row-number column keeps its
+    /// own width. Producers that know their content (for example a worksheet
+    /// whose columns should fit their values) use this after `set_contents`.
+    pub fn set_data_column_widths(&mut self, widths: &[AbsoluteLength], cx: &mut Context<Self>) {
+        self.column_widths.update(cx, |state, _cx| {
+            for (index, width) in widths.iter().enumerate() {
+                if index + 1 >= state.cols() {
+                    break;
+                }
+                state.set_column_configuration(index + 1, *width, TableResizeBehavior::Resizable);
+            }
+        });
+        cx.notify();
+    }
+
     pub fn clear_filters(&mut self, col: AnyColumn, cx: &mut Context<Self>) {
         self.engine.clear_filters_for_col(col);
         self.apply_filter_sort(cx);
@@ -284,9 +299,14 @@ impl TableView {
         cx.notify();
     }
 
+    /// The cursor cell, if the user has navigated the grid yet.
+    pub fn selection(&self) -> Option<CellSelection> {
+        self.selection
+    }
+
     /// The value an inline editor starts from: the decoded cell content, without the quoting
     /// the source file may use for it. A padding cell starts empty.
-    pub(crate) fn cell_display_value(&self, cell: DataCellId) -> Option<SharedString> {
+    pub fn cell_display_value(&self, cell: DataCellId) -> Option<SharedString> {
         match self.engine.contents.get_row(cell.row)?.get(cell.col)? {
             TableCell::Real { cached_value, .. } => Some(cached_value.clone()),
             TableCell::Generated(value) => Some(value.clone()),
@@ -319,11 +339,12 @@ impl TableView {
             editor
         });
 
-        let blur_subscription = cx.subscribe(&editor, |this, _, event: &editor::EditorEvent, cx| {
-            if matches!(event, editor::EditorEvent::Blurred) {
-                this.commit_cell_edit(cx);
-            }
-        });
+        let blur_subscription =
+            cx.subscribe(&editor, |this, _, event: &editor::EditorEvent, cx| {
+                if matches!(event, editor::EditorEvent::Blurred) {
+                    this.commit_cell_edit(cx);
+                }
+            });
 
         let focus_handle = editor.read(cx).focus_handle(cx);
         window.focus(&focus_handle, cx);

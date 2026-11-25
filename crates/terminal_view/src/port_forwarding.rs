@@ -1,4 +1,9 @@
-use std::{collections::HashSet, net::TcpListener, sync::LazyLock, time::Duration};
+use std::{
+    collections::HashSet,
+    net::TcpListener,
+    sync::LazyLock,
+    time::{Duration, Instant},
+};
 
 use anyhow::{Context as _, Result, anyhow};
 use collections::HashMap;
@@ -922,6 +927,14 @@ fn ssh_remote_client(project: &Entity<Project>, cx: &App) -> Option<Entity<Remot
 const STABLE_TUNNEL_THRESHOLD: Duration = Duration::from_secs(10);
 const RETRY_INITIAL_DELAY: Duration = Duration::from_secs(1);
 const RETRY_MAX_DELAY: Duration = Duration::from_secs(30);
+/// A tunnel that survives this long counts as healthy again, so a later failure
+/// restarts the short-lived-tunnel budget instead of continuing the old storm.
+const LONG_STABLE_TUNNEL: Duration = Duration::from_secs(300);
+/// A tunnel that starts, lives past [`STABLE_TUNNEL_THRESHOLD`] and dies again
+/// is respawned after the minimum delay. Without a budget, a link that keeps
+/// dropping the forward every few seconds would spawn an ssh process per second
+/// for the whole session.
+const MAX_SHORT_LIVED_RESTARTS: u32 = 8;
 
 fn retry_delay(failures: u32) -> Duration {
     let exponent = failures.saturating_sub(1).min(5);
@@ -948,6 +961,7 @@ async fn run_forward(
 ) -> Result<()> {
     let key = (direction, target.clone());
     let mut failures = 0_u32;
+    let mut short_lived_restarts = 0_u32;
     let mut cancellation = cancellation.fuse();
     let mut next_local_port = match direction {
         ForwardDirection::RemoteToLocal => {
@@ -991,6 +1005,7 @@ async fn run_forward(
 
         let local_port = next_local_port;
         let attempt = failures.saturating_add(1);
+        let attempt_started = Instant::now();
         let mut early_exit = false;
         let mut stable = false;
         let diagnostic: Option<anyhow::Error>;
@@ -1162,6 +1177,30 @@ async fn run_forward(
         let Some(diagnostic) = diagnostic else {
             return Ok(());
         };
+        let lived = attempt_started.elapsed();
+        if lived >= LONG_STABLE_TUNNEL {
+            short_lived_restarts = 0;
+        } else if stable {
+            short_lived_restarts = short_lived_restarts.saturating_add(1);
+        }
+        if short_lived_restarts > MAX_SHORT_LIVED_RESTARTS {
+            let message = format!("{diagnostic:#}");
+            log::warn!(
+                "SSH port forward {direction:?} {target} keeps dropping after {lived:?}; \
+                 giving up after {} short-lived tunnels",
+                short_lived_restarts
+            );
+            manager.update(cx, |manager, cx| {
+                if let Some(entry) = manager.entries.get_mut(&key)
+                    && entry.generation == generation
+                {
+                    entry.local_port = Some(next_local_port);
+                    entry.status = ForwardStatus::Failed(message);
+                    cx.notify();
+                }
+            })?;
+            return Ok(());
+        }
         failures = if stable {
             1
         } else {

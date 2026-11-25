@@ -16,10 +16,10 @@ use extension_host::ExtensionStore;
 use filter::{FilterData, FilteredServer};
 use futures::{FutureExt, StreamExt as _, channel::oneshot, future::Shared};
 use gpui::{
-    Action, Anchor, AnyElement, App, ClickEvent, ClipboardItem, Context, DismissEvent, Entity,
-    EventEmitter, ExternalPaths, FocusHandle, Focusable, FontWeight, KeyDownEvent, MouseButton,
-    PathPromptOptions, Point, PromptLevel, Rems, ScrollHandle, Subscription, Task, TaskExt,
-    WeakEntity, Window, anchored, deferred, point,
+    Action, Anchor, AnyElement, App, Bounds, ClickEvent, ClipboardItem, Context, DismissEvent,
+    Entity, EventEmitter, ExternalPaths, FocusHandle, Focusable, FontWeight, KeyDownEvent,
+    MouseButton, PathPromptOptions, Pixels, Point, PromptLevel, Rems, ScrollHandle, Subscription,
+    Task, TaskExt, WeakEntity, Window, anchored, deferred, point,
 };
 use log::{debug, info};
 use open_path_prompt::OpenPathDelegate;
@@ -39,8 +39,10 @@ use settings::{
 };
 use std::{
     borrow::Cow,
+    cell::Cell,
     collections::BTreeSet,
     path::PathBuf,
+    rc::Rc,
     sync::{Arc, atomic::AtomicBool},
 };
 
@@ -75,11 +77,24 @@ const COLLAPSED_SERVER_ROWS: usize = 6;
 /// value or the results stop short of the modal edge.
 const DEFAULT_PICKER_WIDTH: Rems = rems(40.);
 
-/// Size of the jump-host popover. The picker inside it is built with the same
-/// height cap and fills it instead of its own content, so the list scrolls
-/// inside the popover rather than running past its bottom edge.
+/// Size of the jump-host popover. The picker inside it fills this rect instead
+/// of sizing itself from its own shape, so its rows and scrollbar stay inside
+/// the popover and the list scrolls rather than growing past the bottom edge.
 const JUMP_HOST_POPOVER_WIDTH: Rems = rems(24.);
 const JUMP_HOST_POPOVER_HEIGHT: Rems = rems(14.);
+
+/// Rows a jump-host popover shows before its list starts scrolling. A shorter
+/// candidate list gets a shorter popover instead of a full-height panel with
+/// nothing under the last row.
+const JUMP_HOST_POPOVER_ROWS: f32 = 4.;
+
+/// Height of the jump-host popover for a given number of candidates. Candidate
+/// rows are one or two lines tall, so the estimate only has to be close: the
+/// list scrolls when it is wrong in either direction.
+fn jump_host_popover_height(rows: usize) -> Rems {
+    let rows = (rows as f32).clamp(1., JUMP_HOST_POPOVER_ROWS);
+    rems((2.5 * rows + 3.).min(JUMP_HOST_POPOVER_HEIGHT.0))
+}
 
 /// Records `project` as the most recently used location on a server,
 /// deduplicating by value and evicting the least recently used entries once
@@ -385,6 +400,10 @@ struct CreateRemoteServerForm {
     jump_host_picker: Option<Entity<Picker<JumpHostPickerDelegate>>>,
     /// Window position the jump-host popover is anchored to.
     jump_host_picker_anchor: Option<Point<gpui::Pixels>>,
+    /// Bounds of the "add jump host" button as of the last frame. The picker
+    /// opens under the button itself, not under whichever point inside it was
+    /// clicked, so the popover stays attached to the control that opened it.
+    add_jump_host_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// Set while a connection test is running so both footer actions lock.
     testing: bool,
     /// Result of the last successful connection test.
@@ -435,6 +454,7 @@ impl CreateRemoteServerForm {
             jump_hosts: Vec::new(),
             jump_host_picker: None,
             jump_host_picker_anchor: None,
+            add_jump_host_bounds: Rc::new(Cell::new(None)),
             testing: false,
             test_success: None,
             tested_connection: None,
@@ -4126,13 +4146,13 @@ impl RemoteServerProjects {
         cx: &mut Context<Self>,
     ) {
         let delegate = JumpHostPickerDelegate::new(candidates, cx.entity().downgrade());
-        // The popover is smaller than the picker's default height cap, and a
-        // picker sized by its content overflows it: the rows past the popover's
-        // edge get clipped and the list can't scroll to them. Cap the picker to
-        // the popover and let the list fill that height, so it scrolls.
+        // The popover owns the picker's rect, so the picker fills it instead of
+        // laying itself out from its own default shape. Sized from the shape it
+        // was wider than the popover, which clipped the rows and their
+        // scrollbar, and it left the results list no height to fill, so a
+        // popover with candidates showed the search field and no rows.
         let picker = cx.new(|cx| {
             Picker::uniform_list(delegate, window, cx)
-                .max_height(JUMP_HOST_POPOVER_HEIGHT)
                 .show_scrollbar(true)
                 .fill_results_height()
                 .embedded()
@@ -4969,6 +4989,10 @@ impl RemoteServerProjects {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let candidate_rows = state
+            .jump_host_picker
+            .as_ref()
+            .map_or(1, |picker| picker.read(cx).delegate.candidates.len());
         if let Some(prompt) = state.ssh_prompt.clone() {
             // Track the prompt's own focus handle, not the modal's: clicking the
             // password or host-key input has to focus that input, otherwise the
@@ -5377,21 +5401,58 @@ impl RemoteServerProjects {
                                     )
                                 })
                                 .child(
-                                    Button::new("add-jump-host", i18n::t!("a1e9b8ca998838e8"))
-                                        .size(ButtonSize::Default)
-                                        .label_size(LabelSize::Small)
-                                        .start_icon(
-                                            Icon::new(IconName::Plus).size(IconSize::XSmall),
-                                        )
-                                        .on_click(cx.listener(
-                                            |this, event: &ClickEvent, window, cx| {
-                                                this.open_jump_host_picker(
-                                                    event.position(),
-                                                    window,
-                                                    cx,
+                                    // A button placed straight in this stretched
+                                    // column would span the whole row, making the
+                                    // empty space beside its label clickable and
+                                    // opening the picker far from the button. The
+                                    // wrapping row keeps the button at its label
+                                    // width.
+                                    h_flex().child({
+                                        let add_jump_host_bounds =
+                                            state.add_jump_host_bounds.clone();
+                                        div()
+                                            .debug_selector(|| "add-jump-host".into())
+                                            .on_children_prepainted(move |bounds, _, _| {
+                                                add_jump_host_bounds.set(bounds.first().copied());
+                                            })
+                                            .child(
+                                                Button::new(
+                                                    "add-jump-host",
+                                                    i18n::t!("a1e9b8ca998838e8"),
                                                 )
-                                            },
-                                        )),
+                                                .size(ButtonSize::Default)
+                                                .label_size(LabelSize::Small)
+                                                .start_icon(
+                                                    Icon::new(IconName::Plus)
+                                                        .size(IconSize::XSmall),
+                                                )
+                                                .on_click(cx.listener(
+                                                    |this, event: &ClickEvent, window, cx| {
+                                                        let anchor = match &this.mode {
+                                                            Mode::CreateRemoteServerForm(state) => {
+                                                                state
+                                                                    .add_jump_host_bounds
+                                                                    .get()
+                                                                    .map(|bounds| {
+                                                                        point(
+                                                                            bounds.left(),
+                                                                            bounds.bottom(),
+                                                                        )
+                                                                    })
+                                                            }
+                                                            _ => None,
+                                                        };
+                                                        this.open_jump_host_picker(
+                                                            anchor.unwrap_or_else(|| {
+                                                                event.position()
+                                                            }),
+                                                            window,
+                                                            cx,
+                                                        )
+                                                    },
+                                                )),
+                                            )
+                                    }),
                                 ),
                         )
                         .child(
@@ -5643,7 +5704,7 @@ impl RemoteServerProjects {
                                                 .debug_selector(|| "form-jump-host-popover".into())
                                                 .occlude()
                                                 .w(JUMP_HOST_POPOVER_WIDTH)
-                                                .h(JUMP_HOST_POPOVER_HEIGHT)
+                                                .h(jump_host_popover_height(candidate_rows))
                                                 .overflow_hidden()
                                                 .rounded_md()
                                                 .border_1()
@@ -10900,6 +10961,308 @@ mod tests {
         assert_eq!(
             managed_ssh_key_display_name(&generated),
             SharedString::from("build")
+        );
+    }
+
+    /// The jump-host picker opens under the button that opened it. The button
+    /// sits in a stretched column, so leaving it as a direct child made it span
+    /// the whole row: most of the row looked empty but was clickable, and the
+    /// popover opened at whatever empty point in the row was hit instead of at
+    /// the button.
+    #[gpui::test]
+    async fn add_jump_host_button_opens_the_picker_under_itself(cx: &mut TestAppContext) {
+        let app_state = init_test(cx);
+        let fs = app_state.fs.as_fake();
+        let project = Project::test(fs.clone(), [], cx).await;
+        let (multi_workspace, cx) = cx.add_window_view(|window, cx| {
+            let workspace = cx.new(|cx| Workspace::test_new(project, window, cx));
+            MultiWorkspace::new(workspace, window, cx)
+        });
+        let workspace =
+            multi_workspace.read_with(cx, |multi_workspace, _| multi_workspace.workspace().clone());
+        cx.simulate_resize(gpui::size(px(1200.), px(800.)));
+        workspace.update_in(cx, |workspace, window, cx| {
+            let weak = cx.weak_entity();
+            workspace.toggle_modal(window, cx, |window, cx| {
+                RemoteServerProjects::new(false, fs.clone(), window, weak, cx)
+            });
+        });
+        cx.run_until_parked();
+
+        workspace.update_in(cx, |workspace, window, cx| {
+            let modal = workspace
+                .active_modal::<RemoteServerProjects>(cx)
+                .expect("the remote server modal is open");
+            modal.update(cx, |modal, cx| {
+                modal.mode = Mode::CreateRemoteServerForm(CreateRemoteServerForm::new(window, cx));
+                let Mode::CreateRemoteServerForm(state) = &mut modal.mode else {
+                    panic!("expected the form mode");
+                };
+                state.advanced_open = true;
+                cx.notify();
+            });
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+
+        let fields = cx
+            .debug_bounds("form-fields")
+            .expect("the fields column is laid out");
+        let button = cx
+            .debug_bounds("add-jump-host")
+            .expect("the add jump host button is laid out");
+        assert!(
+            button.size.width < fields.size.width / 2.,
+            "the add button must be as wide as its label, not the whole column: \
+             {button:?} inside {fields:?}"
+        );
+
+        cx.simulate_click(button.center(), Modifiers::default());
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+
+        let popover = cx
+            .debug_bounds("form-jump-host-popover")
+            .expect("the jump-host overlay is laid out");
+        assert!(
+            (f32::from(popover.origin.x) - f32::from(button.left())).abs() <= 1.,
+            "the popover is attached to the button's left edge: {popover:?} vs {button:?}"
+        );
+        assert!(
+            (f32::from(popover.origin.y) - f32::from(button.bottom()) - 6.).abs() <= 1.,
+            "the popover hangs directly below the button: {popover:?} vs {button:?}"
+        );
+
+        // Dismiss it, then click the empty space at the end of the button's row:
+        // that space is not part of the button and must not reopen the picker.
+        cx.simulate_click(
+            point(popover.right() + px(40.), popover.top() + px(10.)),
+            Modifiers::default(),
+        );
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        assert!(
+            cx.debug_bounds("form-jump-host-popover").is_none(),
+            "clicking outside the popover closes it"
+        );
+
+        let empty_row_end = point(fields.right() - px(12.), button.center().y);
+        cx.simulate_click(empty_row_end, Modifiers::default());
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        assert!(
+            cx.debug_bounds("form-jump-host-popover").is_none(),
+            "the empty space beside the button must not open the picker"
+        );
+    }
+
+    /// The picker inside the jump-host popover has to take the popover's rect.
+    /// Laid out from its own default shape it was wider than the popover, which
+    /// clipped the rows and their scrollbar, and it left the results list no
+    /// height to fill, so a popover with candidates showed the search field and
+    /// no rows at all.
+    #[gpui::test]
+    async fn jump_host_picker_fills_its_popover_with_rows(cx: &mut TestAppContext) {
+        let app_state = init_test(cx);
+        let fs = app_state.fs.as_fake();
+        let project = Project::test(fs.clone(), [], cx).await;
+        let (multi_workspace, cx) = cx.add_window_view(|window, cx| {
+            let workspace = cx.new(|cx| Workspace::test_new(project, window, cx));
+            MultiWorkspace::new(workspace, window, cx)
+        });
+        let workspace =
+            multi_workspace.read_with(cx, |multi_workspace, _| multi_workspace.workspace().clone());
+        cx.simulate_resize(gpui::size(px(1200.), px(800.)));
+        workspace.update_in(cx, |workspace, window, cx| {
+            let weak = cx.weak_entity();
+            workspace.toggle_modal(window, cx, |window, cx| {
+                RemoteServerProjects::new(false, fs.clone(), window, weak, cx)
+            });
+        });
+        cx.run_until_parked();
+
+        workspace.update_in(cx, |workspace, window, cx| {
+            let modal = workspace
+                .active_modal::<RemoteServerProjects>(cx)
+                .expect("the remote server modal is open");
+            modal.update(cx, |modal, cx| {
+                modal.mode = Mode::CreateRemoteServerForm(CreateRemoteServerForm::new(window, cx));
+                let Mode::CreateRemoteServerForm(state) = &mut modal.mode else {
+                    panic!("expected the form mode");
+                };
+                state.advanced_open = true;
+                cx.notify();
+            });
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+
+        let button = cx
+            .debug_bounds("add-jump-host")
+            .expect("the add jump host button is laid out");
+        let anchor = point(button.left(), button.bottom());
+        let candidates = (0..12)
+            .map(|index| {
+                JumpHostCandidate::saved(
+                    format!("bastion-{index}").into(),
+                    format!("bastion-{index}.example.com"),
+                    None,
+                    None,
+                )
+            })
+            .collect::<Vec<_>>();
+        workspace.update_in(cx, |workspace, window, cx| {
+            let modal = workspace
+                .active_modal::<RemoteServerProjects>(cx)
+                .expect("the remote server modal is open");
+            modal.update(cx, |modal, cx| {
+                modal.show_jump_host_picker(candidates, anchor, window, cx);
+            });
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+
+        let popover = cx
+            .debug_bounds("form-jump-host-popover")
+            .expect("the jump-host overlay is laid out");
+        let picker = workspace
+            .update_in(cx, |workspace, _window, cx| {
+                let modal = workspace
+                    .active_modal::<RemoteServerProjects>(cx)
+                    .expect("the remote server modal is open");
+                modal.read_with(cx, |modal, _cx| {
+                    let Mode::CreateRemoteServerForm(state) = &modal.mode else {
+                        panic!("expected the form mode");
+                    };
+                    state.jump_host_picker.clone()
+                })
+            })
+            .expect("the jump-host picker is open")
+            .read_with(cx, |picker, _cx| picker.bounds())
+            .expect("the picker is laid out");
+        assert!(
+            picker.size.width <= popover.size.width,
+            "the picker must fit inside the popover instead of having its rows \
+             and scrollbar clipped: {picker:?} vs {popover:?}"
+        );
+        assert!(
+            picker.size.height > popover.size.height * 0.8,
+            "the picker must fill the popover so the list has height for its rows: \
+             {picker:?} vs {popover:?}"
+        );
+
+        // The rows have to be laid out and hit-testable: click the first one and
+        // the candidate becomes a jump host of the form.
+        let rem_size = cx.update(|window, _| window.rem_size());
+        let first_row = point(
+            picker.left() + px(60.),
+            picker.top() + rem_size * 2.25 + px(20.),
+        );
+        cx.simulate_click(first_row, Modifiers::default());
+        cx.run_until_parked();
+        workspace.update_in(cx, |workspace, _window, cx| {
+            let modal = workspace
+                .active_modal::<RemoteServerProjects>(cx)
+                .expect("the remote server modal is open");
+            modal.read_with(cx, |modal, _cx| {
+                let Mode::CreateRemoteServerForm(state) = &modal.mode else {
+                    panic!("expected the form mode");
+                };
+                assert!(
+                    !state.jump_hosts.is_empty(),
+                    "clicking a candidate row adds that jump host"
+                );
+            });
+        });
+    }
+
+    /// A short candidate list gets a short popover, so it does not render a
+    /// full-height panel with empty space under its only row.
+    #[gpui::test]
+    async fn jump_host_popover_shrinks_for_a_short_candidate_list(cx: &mut TestAppContext) {
+        let app_state = init_test(cx);
+        let fs = app_state.fs.as_fake();
+        let project = Project::test(fs.clone(), [], cx).await;
+        let (multi_workspace, cx) = cx.add_window_view(|window, cx| {
+            let workspace = cx.new(|cx| Workspace::test_new(project, window, cx));
+            MultiWorkspace::new(workspace, window, cx)
+        });
+        let workspace =
+            multi_workspace.read_with(cx, |multi_workspace, _| multi_workspace.workspace().clone());
+        cx.simulate_resize(gpui::size(px(1200.), px(800.)));
+        workspace.update_in(cx, |workspace, window, cx| {
+            let weak = cx.weak_entity();
+            workspace.toggle_modal(window, cx, |window, cx| {
+                RemoteServerProjects::new(false, fs.clone(), window, weak, cx)
+            });
+        });
+        cx.run_until_parked();
+
+        workspace.update_in(cx, |workspace, window, cx| {
+            let modal = workspace
+                .active_modal::<RemoteServerProjects>(cx)
+                .expect("the remote server modal is open");
+            modal.update(cx, |modal, cx| {
+                modal.mode = Mode::CreateRemoteServerForm(CreateRemoteServerForm::new(window, cx));
+                let Mode::CreateRemoteServerForm(state) = &mut modal.mode else {
+                    panic!("expected the form mode");
+                };
+                state.advanced_open = true;
+                cx.notify();
+            });
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+
+        let button = cx
+            .debug_bounds("add-jump-host")
+            .expect("the add jump host button is laid out");
+        let anchor = point(button.left(), button.bottom());
+        let open_with = |candidates: Vec<JumpHostCandidate>, cx: &mut gpui::VisualTestContext| {
+            workspace.update_in(cx, |workspace, window, cx| {
+                let modal = workspace
+                    .active_modal::<RemoteServerProjects>(cx)
+                    .expect("the remote server modal is open");
+                modal.update(cx, |modal, cx| {
+                    modal.show_jump_host_picker(candidates, anchor, window, cx);
+                });
+            });
+            cx.run_until_parked();
+            cx.update(|window, cx| window.draw(cx).clear(cx));
+            cx.debug_bounds("form-jump-host-popover")
+                .expect("the jump-host overlay is laid out")
+        };
+
+        let single = open_with(
+            vec![JumpHostCandidate::saved(
+                "bastion".into(),
+                "bastion.example.com".into(),
+                None,
+                None,
+            )],
+            cx,
+        );
+        let many = open_with(
+            (0..12)
+                .map(|index| {
+                    JumpHostCandidate::saved(
+                        format!("bastion-{index}").into(),
+                        format!("bastion-{index}.example.com"),
+                        None,
+                        None,
+                    )
+                })
+                .collect(),
+            cx,
+        );
+        let rem_size = cx.update(|window, _| window.rem_size());
+        assert!(
+            single.size.height < many.size.height,
+            "one candidate must not open a full-height popover: {single:?} vs {many:?}"
+        );
+        assert!(
+            single.size.height >= rem_size * 4.,
+            "the one-row popover still has room for the search field and the row: {single:?}"
         );
     }
 }

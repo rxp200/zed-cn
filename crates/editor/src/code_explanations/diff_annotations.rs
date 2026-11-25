@@ -348,6 +348,19 @@ fn ensure_worker(
                         .is_some_and(|file| Arc::ptr_eq(file, &pending.file))
                     && allowed(&pending.source, &project, cx)
             };
+            // Cheap liveness check for the permit poll below: the full
+            // authorization inspects the settings JSON, provider digest and
+            // trust state, which is far too expensive to repeat every poll.
+            let still_relevant = |cx: &mut App| {
+                this.read_with(cx, |editor, _| {
+                    editor.explanations.diff.identity == identity
+                        && editor.project() == Some(&project)
+                })
+                .unwrap_or(false)
+                    && CodeExplanationSettings::get_global(cx).enabled
+                    && !project::DisableAiSettings::get_global(cx).disable_ai
+                    && epoch == CACHE_EPOCH.load(Ordering::SeqCst)
+            };
             if !cx.update(authorized) {
                 break;
             }
@@ -407,7 +420,7 @@ fn ensure_worker(
                         }
                     };
                     let permit = loop {
-                        if !cx.update(authorized) {
+                        if !cx.update(still_relevant) {
                             break None;
                         }
                         if let Some(permit) = waiting.acquire(settings.max_concurrent_requests) {
@@ -418,6 +431,10 @@ fn ensure_worker(
                     let Some(permit) = permit else {
                         break;
                     };
+                    if !cx.update(authorized) {
+                        drop(permit);
+                        break;
+                    }
                     let result = request_if_authorized(
                         authorized,
                         model.clone(),

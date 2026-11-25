@@ -99,6 +99,9 @@ jobs:
       - name: Test the release publisher
         run: python3 -m unittest script.test_publish_release_assets
 
+      - name: Guard WASI SDK download retry and integrity
+        run: python3 script/test_download_wasi_sdk.py
+
       - name: Validate source version and frozen public main source
         id: source
         shell: pwsh

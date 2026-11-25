@@ -1025,7 +1025,7 @@ impl HeadlessProject {
         let load_task = worktree.update(&mut cx, |worktree, cx| {
             worktree.load_binary_file(path.as_ref(), cx)
         });
-        log::info!(
+        log::debug!(
             "[open-debug] remote open_image_by_path {:?}",
             path.as_unix_str()
         );
@@ -1033,7 +1033,7 @@ impl HeadlessProject {
         let loaded_file = load_task.await?;
         let content = loaded_file.content;
         let file = loaded_file.file;
-        log::info!(
+        log::debug!(
             "[open-debug] remote image read {:?} ({} bytes)",
             path.as_unix_str(),
             content.len()
@@ -1165,7 +1165,7 @@ impl HeadlessProject {
         use std::io::{Read as _, Seek as _};
         let request = message.payload;
         let path = RelPath::from_unix_str(&request.path)?;
-        log::info!(
+        log::debug!(
             "[open-debug] remote read_document_chunk {:?} offset={}",
             path.as_unix_str(),
             request.offset
@@ -1231,7 +1231,7 @@ impl HeadlessProject {
             is_deleted: false,
             is_historic: false,
         });
-        log::info!(
+        log::debug!(
             "[open-debug] remote document chunk {:?} offset={} returned {} of {} bytes",
             path.as_unix_str(),
             request.offset,

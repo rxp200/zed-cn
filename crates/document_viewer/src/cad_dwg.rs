@@ -19,8 +19,25 @@ use opendwg::{Color, Drawing, Error as DwgError, Handle};
 use crate::cad_dxf::{Transform, insertion_transform, strip_text_codes, vertices_to_points};
 use crate::cad_scene::{
     ACI_FOREGROUND, COLOR_INHERIT, CadColor, CadLayer, CadScene, MAX_INSERT_DEPTH, encode_aci,
-    encode_truecolor, push_arc_points, push_ellipse_points,
+    encode_truecolor, normalize_ccw_sweep, normalize_cw_sweep, push_arc_points,
+    push_ellipse_points,
 };
+
+/// Largest MINSERT grid expanded per array entity. Every cell re-walks the
+/// whole block, so a declared `i16` grid of 32767×32767 has to be bounded.
+const MAX_MINSERT_CELLS: i64 = 4096;
+
+/// Clamps a declared MINSERT grid to [`MAX_MINSERT_CELLS`] cells, reporting
+/// whether the declaration had to be truncated.
+fn bounded_minsert_grid(rows: i16, columns: i16) -> (i64, i64, bool) {
+    let rows = i64::from(rows.max(1));
+    let columns = i64::from(columns.max(1));
+    if rows.saturating_mul(columns) <= MAX_MINSERT_CELLS {
+        return (rows, columns, false);
+    }
+    let limit = (MAX_MINSERT_CELLS as f64).sqrt().floor() as i64;
+    (rows.min(limit), columns.min(limit), true)
+}
 
 /// Why a DWG file cannot be previewed at all.
 #[derive(Debug)]
@@ -165,6 +182,9 @@ impl<'a> Reader<'a> {
         }
         let drawing = self.drawing;
         for handle in drawing.entities_in(block) {
+            if self.scene.truncated {
+                return;
+            }
             self.walk_entity(handle, &transform, insert_layer, block_color, depth);
         }
     }
@@ -217,12 +237,12 @@ impl<'a> Reader<'a> {
                 if radius <= 0.0 {
                     return;
                 }
-                let mut sweep = arc.end_angle - arc.start_angle;
                 // DWG arcs run counter-clockwise from the start angle, so a
-                // non-positive sweep is a full turn.
-                while sweep <= 1e-12 {
-                    sweep += std::f64::consts::TAU;
-                }
+                // non-positive sweep is a full turn. Normalizing with `rem_euclid`
+                // keeps out-of-range angles from spinning a `+= TAU` loop forever.
+                let Some(sweep) = normalize_ccw_sweep(arc.end_angle - arc.start_angle) else {
+                    return;
+                };
                 let mut points = Vec::with_capacity(80);
                 points.push([
                     center[0] + radius * arc.start_angle.cos(),
@@ -453,6 +473,9 @@ impl<'a> Reader<'a> {
             self.scene.note_skipped("INSERT nesting");
             return;
         }
+        if self.scene.truncated {
+            return;
+        }
         if self.paper_space.contains(&insert.block) || block.is_xref {
             return;
         }
@@ -485,14 +508,22 @@ impl<'a> Reader<'a> {
         color: CadColor,
         depth: u8,
     ) {
-        let columns = array.columns.max(1);
-        let rows = array.rows.max(1);
+        // `rows`/`columns` are `i16`, so a declared array can hold ~1e9 cells and
+        // each cell expands the whole block. Bound the grid itself, then stop as
+        // soon as the scene budgets are exhausted.
+        let (rows, columns, clamped) = bounded_minsert_grid(array.rows, array.columns);
+        if clamped {
+            self.scene.note_skipped("MINSERT array size");
+        }
         let (sin, cos) = array.insert.rotation.sin_cos();
         for row in 0..rows {
             for column in 0..columns {
+                if self.scene.truncated {
+                    return;
+                }
                 let offset = [
-                    f64::from(column) * array.column_spacing,
-                    f64::from(row) * array.row_spacing,
+                    column as f64 * array.column_spacing,
+                    row as f64 * array.row_spacing,
                 ];
                 let mut cell = array.insert.clone();
                 cell.insertion[0] += offset[0] * cos - offset[1] * sin;
@@ -784,18 +815,17 @@ fn arc_start(center: [f64; 2], radius: f64, angle: f64) -> [f64; 2] {
 }
 
 /// The sweep from `start` to `end` in the direction the edge was drawn.
+///
+/// Edge angles are arbitrary drawing data, so this normalizes with `rem_euclid`
+/// instead of stepping by `TAU`: a loop cannot fail to advance on huge values.
 fn arc_sweep(start: f64, end: f64, ccw: bool) -> f64 {
-    let mut sweep = end - start;
-    if ccw {
-        while sweep <= 0.0 {
-            sweep += std::f64::consts::TAU;
-        }
+    let sweep = end - start;
+    let normalized = if ccw {
+        normalize_ccw_sweep(sweep)
     } else {
-        while sweep >= 0.0 {
-            sweep -= std::f64::consts::TAU;
-        }
-    }
-    sweep
+        normalize_cw_sweep(sweep)
+    };
+    normalized.unwrap_or(0.0)
 }
 
 /// Appends a point unless it repeats the previous one, so stitched edges share
@@ -856,6 +886,29 @@ pub(crate) fn minimal_dwg_with_lines(lines: usize) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn arc_sweeps_normalize_without_looping() {
+        // Out-of-range edge angles once spun the `-= TAU` normalization forever.
+        assert!(arc_sweep(0.0, 1e300, true) > 0.0);
+        assert!(arc_sweep(1e300, 0.0, true) > 0.0);
+        assert!(arc_sweep(-1e300, 1e300, false) < 0.0);
+        assert_eq!(arc_sweep(f64::NAN, 0.0, true), 0.0);
+        assert_eq!(
+            arc_sweep(0.0, std::f64::consts::TAU, true),
+            std::f64::consts::TAU
+        );
+    }
+
+    #[test]
+    fn minsert_grids_are_bounded() {
+        assert_eq!(bounded_minsert_grid(2, 3), (2, 3, false));
+        assert_eq!(bounded_minsert_grid(0, 0), (1, 1, false));
+        let (rows, columns, truncated) = bounded_minsert_grid(i16::MAX, i16::MAX);
+        assert_eq!((rows, columns), (64, 64));
+        assert!(truncated);
+        assert!(rows * columns <= MAX_MINSERT_CELLS);
+    }
     use opendwg::object::{
         Arc, Circle, Entity, EntityCommon, LWPOLYLINE_CLOSED, Line, LwPolyline, Text,
     };
