@@ -39,12 +39,12 @@ use git::{
     parse_git_remote_url,
     repository::{
         AUTHOR_SEARCH_QUERY_PREFIX, Branch, BranchesScanResult, CommitData, CommitDetails,
-        CommitFileStatus, CommitOptions, CreateWorktreeTarget, DiffStatType, DiffType,
-        FetchOptions, FileHistoryChangedFileSets, GitCommitTemplate, GitRepository,
+        CommitFileStatus, CommitOptions, CommitSummary, CreateWorktreeTarget, DiffStatType,
+        DiffType, FetchOptions, FileHistoryChangedFileSets, GitCommitTemplate, GitRepository,
         GitRepositoryCheckpoint, InitialGraphCommitData, LogOrder, LogSource,
-        OperationCancellation, PushOptions, Remote, RemoteCommandOutput, RepoPath, ResetMode,
-        SearchCommitArgs, UpstreamTrackingStatus, Worktree as GitWorktree, delete_branch_flag,
-        is_binary_content,
+        OperationCancellation, OutgoingCommits, PushOptions, Remote, RemoteCommandOutput, RepoPath,
+        ResetMode, SearchCommitArgs, UpstreamTrackingStatus, Worktree as GitWorktree,
+        delete_branch_flag, is_binary_content,
     },
     stash::{GitStash, StashEntry},
     status::{
@@ -836,6 +836,16 @@ pub enum RepositoryState {
     Remote(RemoteRepositoryState),
 }
 
+/// Failure while listing the commits that pushing a branch would send.
+#[derive(Debug)]
+pub enum OutgoingCommitsError {
+    /// The connected remote server does not advertise the push-preview
+    /// capability, so asking it for outgoing commits would send a message it
+    /// cannot decode.
+    UnsupportedRemoteServer,
+    Failed(anyhow::Error),
+}
+
 enum PermalinkTarget {
     Buffer {
         buffer_id: BufferId,
@@ -1099,6 +1109,7 @@ impl GitStore {
         client.add_entity_request_handler(Self::handle_set_index_text);
         client.add_entity_request_handler(Self::handle_askpass);
         client.add_entity_request_handler(Self::handle_check_for_pushed_commits);
+        client.add_entity_request_handler(Self::handle_get_outgoing_commits);
         client.add_entity_request_handler(Self::handle_git_diff);
         client.add_entity_request_handler(Self::handle_tree_diff);
         client.add_entity_request_handler(Self::handle_get_blob_content);
@@ -1128,6 +1139,16 @@ impl GitStore {
 
     pub fn is_local(&self) -> bool {
         matches!(self.state, GitStoreState::Local { .. })
+    }
+
+    /// Whether the host that owns this project's repositories can list
+    /// outgoing commits. Local projects always can; remote projects need a
+    /// server that advertised the push-preview capability.
+    pub fn remote_supports_git_outgoing_commits(&self, cx: &App) -> bool {
+        self.project
+            .as_ref()
+            .and_then(|project| project.upgrade())
+            .is_none_or(|project| project.read(cx).supports_remote_git_outgoing_commits(cx))
     }
 
     fn set_active_repo_id(&mut self, repo_id: RepositoryId, cx: &mut Context<Self>) {
@@ -4328,6 +4349,37 @@ impl GitStore {
             error: branches_scan.error.map(|error| error.to_string()),
         })
     }
+    async fn handle_get_outgoing_commits(
+        this: Entity<Self>,
+        envelope: TypedEnvelope<proto::GetOutgoingCommits>,
+        mut cx: AsyncApp,
+    ) -> Result<proto::GetOutgoingCommitsResponse> {
+        let repository_id = RepositoryId::from_proto(envelope.payload.repository_id);
+        let repository_handle = Self::repository_for_request(&this, repository_id, &mut cx)?;
+
+        let upstream_ref = envelope
+            .payload
+            .upstream_ref
+            .clone()
+            .map(SharedString::from);
+        let limit = usize::try_from(envelope.payload.limit).unwrap_or(usize::MAX);
+
+        let outgoing = repository_handle
+            .update(&mut cx, |repository_handle, _| {
+                repository_handle.outgoing_commits_for_request(upstream_ref, limit)
+            })
+            .await??;
+
+        Ok(proto::GetOutgoingCommitsResponse {
+            commits: outgoing
+                .commits
+                .into_iter()
+                .map(outgoing_commit_to_proto)
+                .collect(),
+            truncated: outgoing.truncated,
+        })
+    }
+
     async fn handle_get_default_branch(
         this: Entity<Self>,
         envelope: TypedEnvelope<proto::GetDefaultBranch>,
@@ -9480,6 +9532,77 @@ impl Repository {
         })
     }
 
+    /// Lists the commits that pushing the current branch would send, newest
+    /// first, up to `limit` commits.
+    ///
+    /// The query runs on the host that owns the repository. For a remote
+    /// project this requires a server that advertised the outgoing-commits
+    /// capability; otherwise the returned error says so and no request is
+    /// sent.
+    pub fn outgoing_commits(
+        &mut self,
+        upstream_ref: Option<SharedString>,
+        limit: usize,
+        cx: &App,
+    ) -> oneshot::Receiver<Result<OutgoingCommits, OutgoingCommitsError>> {
+        let remote_supported = self
+            .git_store()
+            .is_none_or(|git_store| git_store.read(cx).remote_supports_git_outgoing_commits(cx));
+        if !remote_supported {
+            let (result_tx, result_rx) = oneshot::channel();
+            result_tx
+                .send(Err(OutgoingCommitsError::UnsupportedRemoteServer))
+                .ok();
+            return result_rx;
+        }
+
+        let id = self.id;
+        self.send_job("outgoing_commits", None, move |repo, _| async move {
+            match repo {
+                RepositoryState::Local(LocalRepositoryState { backend, .. }) => backend
+                    .outgoing_commits(upstream_ref, limit)
+                    .await
+                    .map_err(OutgoingCommitsError::Failed),
+                RepositoryState::Remote(RemoteRepositoryState { project_id, client }) => {
+                    let response = client
+                        .request(proto::GetOutgoingCommits {
+                            project_id: project_id.0,
+                            repository_id: id.to_proto(),
+                            upstream_ref: upstream_ref.map(|upstream_ref| upstream_ref.to_string()),
+                            limit: u32::try_from(limit).unwrap_or(u32::MAX),
+                        })
+                        .await
+                        .map_err(OutgoingCommitsError::Failed)?;
+                    Ok(OutgoingCommits {
+                        commits: response
+                            .commits
+                            .into_iter()
+                            .map(outgoing_commit_from_proto)
+                            .collect(),
+                        truncated: response.truncated,
+                    })
+                }
+            }
+        })
+    }
+
+    /// Serves the client-facing outgoing-commits query when this repository
+    /// lives on a remote server.
+    fn outgoing_commits_for_request(
+        &mut self,
+        upstream_ref: Option<SharedString>,
+        limit: usize,
+    ) -> oneshot::Receiver<Result<OutgoingCommits>> {
+        self.send_job("outgoing_commits", None, move |repo, _| async move {
+            let RepositoryState::Local(LocalRepositoryState { backend, .. }) = repo else {
+                anyhow::bail!(
+                    "outgoing commits can only be listed on the host that owns the repository"
+                );
+            };
+            backend.outgoing_commits(upstream_ref, limit).await
+        })
+    }
+
     /// If this is a linked worktree (*NOT* the main checkout of a repository),
     /// returns the path for the linked worktree.
     ///
@@ -11631,6 +11754,26 @@ fn commit_data_from_proto(commit: proto::CommitData) -> Result<CommitData> {
         subject: SharedString::from(commit.subject),
         message: SharedString::from(commit.message),
     })
+}
+
+fn outgoing_commit_to_proto(commit: CommitSummary) -> proto::OutgoingCommit {
+    proto::OutgoingCommit {
+        sha: commit.sha.to_string(),
+        subject: commit.subject.to_string(),
+        commit_timestamp: commit.commit_timestamp,
+        author_name: commit.author_name.to_string(),
+        has_parent: commit.has_parent,
+    }
+}
+
+fn outgoing_commit_from_proto(commit: proto::OutgoingCommit) -> CommitSummary {
+    CommitSummary {
+        sha: SharedString::from(commit.sha),
+        subject: SharedString::from(commit.subject),
+        commit_timestamp: commit.commit_timestamp,
+        author_name: SharedString::from(commit.author_name),
+        has_parent: commit.has_parent,
+    }
 }
 
 fn branch_to_proto(branch: &git::repository::Branch) -> proto::Branch {

@@ -1138,6 +1138,7 @@
       "ctrl-g down": "git::Pull",
       "ctrl-g shift-down": "git::PullRebase",
       "ctrl-g shift-up": "git::ForcePush",
+      "ctrl-g shift-p": "git::PreviewPush",
       "ctrl-g d": "git::Diff",
       "ctrl-g backspace": "git::RestoreTrackedFiles",
       "ctrl-g shift-backspace": "git::TrashUntrackedFiles",
@@ -1147,6 +1148,14 @@
       "ctrl-shift-enter": "git::Amend",
     },
   },
+  {
+    "context": "PushPreview",
+    "bindings": {
+      "escape": "menu::Cancel",
+      "enter": "menu::Confirm",
+    },
+  },
+
   {
     "context": "GitDiff > Editor",
     "bindings": {

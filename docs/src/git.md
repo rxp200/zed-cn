@@ -137,6 +137,16 @@ Zed respects Git's push configuration. When pushing, Zed checks the following in
 
 This matches Git's standard behavior, so if you've configured `pushRemote` or `pushDefault` in your `.gitconfig` or via `git config`, Zed will use those settings.
 
+### Push Preview
+
+Before pushing, you can review what the push would send: use {#action git::PreviewPush} from the Command Palette, open the chevron menu next to the Git Panel's push button and choose "Push preview…", or press `ctrl-g shift-p` in the Git Panel.
+
+The dialog lists the commits the push would send, newest first, and shows the files changed by the selected commit. Clicking a file opens that file's diff for the commit in the editor, so you can review the change before confirming the push. The header shows the local branch, its target remote branch, whether the branch is being published for the first time, and a warning when the remote branch has commits you do not have (pushing will then be rejected until you pull).
+
+The list is limited to the most recent commits and is based on the remote-tracking branch as of your last fetch; it does not fetch automatically. Pushing still uses the regular push command, including Git's push configuration and credential prompts. Branches without an upstream list the commits that are not yet on any remote.
+
+Previewing commits requires a remote server that supports the query when you are working in a remote project. Older or official remote servers do not, and the dialog explains that instead of sending an unsupported request.
+
 ## Remotes
 
 When your repository has multiple remotes, Zed shows a remote selector in the Git Panel. Click the remote button next to push/pull to choose which remote to use for that operation.

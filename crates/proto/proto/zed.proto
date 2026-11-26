@@ -320,6 +320,8 @@ message Envelope {
 
     CheckForPushedCommits check_for_pushed_commits = 315;
     CheckForPushedCommitsResponse check_for_pushed_commits_response = 316;
+    GetOutgoingCommits get_outgoing_commits = 542;
+    GetOutgoingCommitsResponse get_outgoing_commits_response = 543;
 
     AskPassRequest ask_pass_request = 317;
     AskPassResponse ask_pass_response = 318;

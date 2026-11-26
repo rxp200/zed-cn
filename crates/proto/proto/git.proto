@@ -278,6 +278,29 @@ message CheckForPushedCommitsResponse {
   repeated string pushed_to = 1;
 }
 
+message GetOutgoingCommits {
+  uint64 project_id = 1;
+  reserved 2;
+  uint64 repository_id = 3;
+  // Fully qualified remote-tracking ref such as `refs/remotes/origin/main`.
+  // Missing when the branch has no upstream yet.
+  optional string upstream_ref = 4;
+  uint32 limit = 5;
+}
+
+message OutgoingCommit {
+  string sha = 1;
+  string subject = 2;
+  int64 commit_timestamp = 3;
+  string author_name = 4;
+  bool has_parent = 5;
+}
+
+message GetOutgoingCommitsResponse {
+  repeated OutgoingCommit commits = 1;
+  bool truncated = 2;
+}
+
 message GitShow {
   uint64 project_id = 1;
   reserved 2;

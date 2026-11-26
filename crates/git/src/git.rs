@@ -99,6 +99,8 @@ actions!(
         Uncommit,
         /// Pushes commits to the remote repository.
         Push,
+        /// Shows the commits that will be pushed before pushing them.
+        PreviewPush,
         /// Pushes commits to a specific remote branch.
         PushTo,
         /// Force pushes commits to the remote repository.

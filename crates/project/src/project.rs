@@ -2608,6 +2608,17 @@ impl Project {
         })
     }
 
+    /// Whether the host that owns this project's repositories can list the
+    /// commits that a push would send. Local projects always can; a remote
+    /// project needs a server that advertised the push-preview capability, so
+    /// older or official servers are never sent the request.
+    pub fn supports_remote_git_outgoing_commits(&self, cx: &App) -> bool {
+        self.remote_client.as_ref().is_none_or(|client| {
+            let client = client.read(cx);
+            client.supports_git_outgoing_commits()
+        })
+    }
+
     pub fn create_temporary_file(
         &self,
         suggested_name: String,
