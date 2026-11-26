@@ -78,6 +78,36 @@ def replace_lockfile_zed_version(path: Path, version: str) -> None:
     path.write_text(updated)
 
 
+def protected_paths_in(commit: str) -> list[str]:
+    """Return the protected paths that exist in `commit`.
+
+    Upstream v1.30.2 deleted `.rules` and folded its content into `AGENTS.md`, so the
+    protected set has to be read from the selected baseline instead of assumed.
+    """
+    existing = []
+    for path in PROTECTED_STABLE_PATHS:
+        result = subprocess.run(
+            ["git", "cat-file", "-e", f"{commit}:{path}"],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        if result.returncode == 0:
+            existing.append(path)
+    return existing
+
+
+def blob_at(reference: str) -> str | None:
+    result = subprocess.run(
+        ["git", "rev-parse", "--verify", "--quiet", reference],
+        check=False,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+    )
+    return result.stdout.strip() if result.returncode == 0 else None
+
+
 def changed_protocol_paths(stable_commit: str, source_commit: str) -> list[str]:
     output = git(
         "diff",
@@ -146,9 +176,14 @@ def validate_generated_tree(source_commit: str, stable_commit: str) -> None:
         )
 
     for path in PROTECTED_STABLE_PATHS:
-        generated_blob = git("rev-parse", f":{path}")
-        stable_blob = git("rev-parse", f"{stable_commit}:{path}")
+        generated_blob = blob_at(f":{path}")
+        stable_blob = blob_at(f"{stable_commit}:{path}")
         if generated_blob != stable_blob:
+            if stable_blob is None:
+                raise RuntimeError(
+                    f"{path} exists in the generated tree but the official Stable baseline "
+                    "does not contain it"
+                )
             raise RuntimeError(f"{path} does not match the official Stable baseline")
 
 
@@ -234,7 +269,9 @@ def main() -> int:
         arguments.release_tag, arguments.release_repository, arguments.previous_release
     )
     git("read-tree", "--reset", "-u", source_commit, capture=False)
-    git("checkout", stable_commit, "--", *PROTECTED_STABLE_PATHS, capture=False)
+    protected_paths = protected_paths_in(stable_commit)
+    if protected_paths:
+        git("checkout", stable_commit, "--", *protected_paths, capture=False)
 
     Path("crates/zed/RELEASE_CHANNEL").write_text("stable\n")
     replace_manifest_version(Path("crates/zed/Cargo.toml"), version)
