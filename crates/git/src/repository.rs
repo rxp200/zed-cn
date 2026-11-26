@@ -110,6 +110,15 @@ static GRAPH_COMMIT_FORMAT: &str = "--format=%H%x00%P%x00%D";
 /// %H - Full commit hash
 static SEARCH_COMMIT_FORMAT: &str = "--format=%H";
 
+/// Format string used to list the commits that a push would send.
+/// %H - Full commit hash
+/// %P - Parent hashes
+/// %at - Author timestamp, unix seconds
+/// %an - Author name
+/// %s - Subject
+/// %x00 - Null byte separator, used to split up commit data
+static OUTGOING_COMMIT_FORMAT: &str = "--format=%H%x00%P%x00%at%x00%an%x00%s";
+
 /// Number of commits to load per chunk for the git graph.
 pub const GRAPH_CHUNK_SIZE: usize = 1000;
 
@@ -570,6 +579,15 @@ pub struct CommitSummary {
     pub commit_timestamp: i64,
     pub author_name: SharedString,
     pub has_parent: bool,
+}
+
+/// The commits that pushing the current branch would send to its upstream,
+/// newest first.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct OutgoingCommits {
+    pub commits: Vec<CommitSummary>,
+    /// True when the repository has more outgoing commits than were requested.
+    pub truncated: bool,
 }
 
 #[derive(Clone, Debug, Default, Hash, PartialEq, Eq)]
@@ -1120,6 +1138,19 @@ pub trait GitRepository: Send + Sync {
 
     /// returns a list of remote branches that contain HEAD
     fn check_for_pushed_commit(&self) -> BoxFuture<'_, Result<Vec<SharedString>>>;
+
+    /// Returns the commits that pushing the current branch would send, newest
+    /// first, up to `limit` commits.
+    ///
+    /// `upstream_ref` is a fully qualified remote-tracking ref such as
+    /// `refs/remotes/origin/main`. When it is `None`, the branch has no
+    /// upstream yet and publishing it would send every commit that is not
+    /// reachable from a remote-tracking ref.
+    fn outgoing_commits(
+        &self,
+        upstream_ref: Option<SharedString>,
+        limit: usize,
+    ) -> BoxFuture<'_, Result<OutgoingCommits>>;
 
     /// Run git diff
     fn diff(&self, diff: DiffType) -> BoxFuture<'_, Result<String>>;
@@ -3528,6 +3559,70 @@ impl GitRepository for RealGitRepository {
         .boxed()
     }
 
+    fn outgoing_commits(
+        &self,
+        upstream_ref: Option<SharedString>,
+        limit: usize,
+    ) -> BoxFuture<'_, Result<OutgoingCommits>> {
+        let git = self.git_binary();
+        // A remote client supplies this ref and it is spliced into a `git log`
+        // revision range, so only the fully qualified form a branch scan produces is
+        // accepted. A value such as `--output=<path>` would otherwise be read as a
+        // command-line option instead of a revision; fall back to listing unpushed
+        // commits rather than forwarding it to git.
+        let upstream_ref = upstream_ref.filter(|upstream_ref| {
+            let valid = upstream_ref.starts_with("refs/") && !upstream_ref.contains('\0');
+            if !valid {
+                log::warn!("ignoring malformed upstream ref for outgoing commits: {upstream_ref}");
+            }
+            valid
+        });
+
+        async move {
+            let mut args = vec![
+                "log".to_string(),
+                OUTGOING_COMMIT_FORMAT.to_string(),
+                format!("--max-count={}", limit.saturating_add(1)),
+            ];
+            match upstream_ref {
+                Some(upstream_ref) => args.push(format!("{upstream_ref}..HEAD")),
+                None => {
+                    args.push("HEAD".to_string());
+                    args.push("--not".to_string());
+                    args.push("--remotes".to_string());
+                }
+            }
+            args.push("--".to_string());
+
+            let mut command = git.build_command(&args);
+            command.stdout(Stdio::piped());
+            command.stderr(Stdio::piped());
+
+            let output = command.output().await?;
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                let stderr = stderr.trim();
+                if stderr.is_empty() {
+                    anyhow::bail!(
+                        "git log failed with {} while listing outgoing commits",
+                        output.status
+                    );
+                }
+                anyhow::bail!(
+                    "git log failed with {} while listing outgoing commits: {stderr}",
+                    output.status
+                );
+            }
+
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let mut commits = parse_outgoing_commits(stdout.lines());
+            let truncated = commits.len() > limit;
+            commits.truncate(limit);
+            Ok(OutgoingCommits { commits, truncated })
+        }
+        .boxed()
+    }
+
     fn search_commits(
         &self,
         log_source: LogSource,
@@ -3845,6 +3940,32 @@ fn parse_initial_graph_output<'a>(
                 parents,
                 ref_names,
             }))
+        })
+        .collect()
+}
+
+fn parse_outgoing_commits<'a>(lines: impl Iterator<Item = &'a str>) -> Vec<CommitSummary> {
+    lines
+        .filter_map(|line| {
+            if line.is_empty() {
+                return None;
+            }
+            // Format: "SHA\x00PARENT1 PARENT2...\x00TIMESTAMP\x00AUTHOR\x00SUBJECT"
+            let mut parts = line.split('\x00');
+
+            let sha = parts.next()?;
+            let parents = parts.next()?;
+            let commit_timestamp = parts.next()?.parse::<i64>().ok()?;
+            let author_name = parts.next()?;
+            let subject = parts.next()?;
+
+            Some(CommitSummary {
+                sha: sha.into(),
+                subject: subject.into(),
+                commit_timestamp,
+                author_name: author_name.into(),
+                has_parent: !parents.is_empty(),
+            })
         })
         .collect()
 }
@@ -7206,5 +7327,191 @@ mod tests {
             remote_urls.get("upstream").unwrap(),
             "/Users/user/My Projects/upstream.git"
         );
+    }
+
+    #[gpui::test]
+    async fn test_outgoing_commits_lists_only_commits_after_the_upstream(cx: &mut TestAppContext) {
+        disable_git_global_config();
+        cx.executor().allow_parking();
+
+        let repo_dir = tempfile::tempdir().unwrap();
+        git_init_repo(repo_dir.path());
+        let file_path = repo_dir.path().join("file.txt");
+
+        fs::write(&file_path, "base\n").unwrap();
+        git_command(repo_dir.path(), ["add", "file.txt"]);
+        git_command(repo_dir.path(), ["commit", "-m", "base"]);
+        let base_sha = git_command_output(repo_dir.path(), ["rev-parse", "HEAD"]);
+        git_command(
+            repo_dir.path(),
+            ["update-ref", "refs/remotes/origin/main", base_sha.trim()],
+        );
+
+        for (content, message) in [("second\n", "second"), ("third\n", "third")] {
+            fs::write(&file_path, content).unwrap();
+            git_command(repo_dir.path(), ["add", "file.txt"]);
+            git_command(repo_dir.path(), ["commit", "-m", message]);
+        }
+
+        let repository = RealGitRepository::new(
+            &repo_dir.path().join(".git"),
+            None,
+            Some("git".into()),
+            cx.executor(),
+        )
+        .unwrap();
+
+        let outgoing = repository
+            .outgoing_commits(Some("refs/remotes/origin/main".into()), 50)
+            .await
+            .unwrap();
+        assert!(!outgoing.truncated);
+        assert_eq!(
+            outgoing
+                .commits
+                .iter()
+                .map(|commit| commit.subject.as_ref())
+                .collect::<Vec<_>>(),
+            vec!["third", "second"]
+        );
+        assert!(outgoing.commits.iter().all(|commit| commit.has_parent));
+
+        let limited = repository
+            .outgoing_commits(Some("refs/remotes/origin/main".into()), 1)
+            .await
+            .unwrap();
+        assert!(limited.truncated);
+        assert_eq!(limited.commits.len(), 1);
+        assert_eq!(limited.commits[0].subject.as_ref(), "third");
+    }
+
+    #[gpui::test]
+    async fn test_outgoing_commits_without_upstream_skips_remote_commits(cx: &mut TestAppContext) {
+        disable_git_global_config();
+        cx.executor().allow_parking();
+
+        let repo_dir = tempfile::tempdir().unwrap();
+        git_init_repo(repo_dir.path());
+        let file_path = repo_dir.path().join("file.txt");
+
+        fs::write(&file_path, "published\n").unwrap();
+        git_command(repo_dir.path(), ["add", "file.txt"]);
+        git_command(repo_dir.path(), ["commit", "-m", "published"]);
+        let published_sha = git_command_output(repo_dir.path(), ["rev-parse", "HEAD"]);
+        git_command(
+            repo_dir.path(),
+            [
+                "update-ref",
+                "refs/remotes/origin/main",
+                published_sha.trim(),
+            ],
+        );
+
+        fs::write(&file_path, "local only\n").unwrap();
+        git_command(repo_dir.path(), ["add", "file.txt"]);
+        git_command(repo_dir.path(), ["commit", "-m", "local only"]);
+
+        let repository = RealGitRepository::new(
+            &repo_dir.path().join(".git"),
+            None,
+            Some("git".into()),
+            cx.executor(),
+        )
+        .unwrap();
+
+        let outgoing = repository.outgoing_commits(None, 50).await.unwrap();
+        assert!(!outgoing.truncated);
+        assert_eq!(
+            outgoing
+                .commits
+                .iter()
+                .map(|commit| commit.subject.as_ref())
+                .collect::<Vec<_>>(),
+            vec!["local only"]
+        );
+    }
+
+    #[gpui::test]
+    async fn test_outgoing_commits_is_empty_when_head_is_the_upstream(cx: &mut TestAppContext) {
+        disable_git_global_config();
+        cx.executor().allow_parking();
+
+        let repo_dir = tempfile::tempdir().unwrap();
+        git_init_repo(repo_dir.path());
+        let file_path = repo_dir.path().join("file.txt");
+        fs::write(&file_path, "content\n").unwrap();
+        git_command(repo_dir.path(), ["add", "file.txt"]);
+        git_command(repo_dir.path(), ["commit", "-m", "only commit"]);
+        let head_sha = git_command_output(repo_dir.path(), ["rev-parse", "HEAD"]);
+        git_command(
+            repo_dir.path(),
+            ["update-ref", "refs/remotes/origin/main", head_sha.trim()],
+        );
+
+        let repository = RealGitRepository::new(
+            &repo_dir.path().join(".git"),
+            None,
+            Some("git".into()),
+            cx.executor(),
+        )
+        .unwrap();
+
+        let outgoing = repository
+            .outgoing_commits(Some("refs/remotes/origin/main".into()), 50)
+            .await
+            .unwrap();
+        assert!(!outgoing.truncated);
+        assert!(outgoing.commits.is_empty());
+    }
+
+    #[gpui::test]
+    async fn test_outgoing_commits_ignores_option_like_upstream_refs(cx: &mut TestAppContext) {
+        disable_git_global_config();
+        cx.executor().allow_parking();
+
+        let repo_dir = tempfile::tempdir().unwrap();
+        git_init_repo(repo_dir.path());
+        let file_path = repo_dir.path().join("file.txt");
+        fs::write(&file_path, "published\n").unwrap();
+        git_command(repo_dir.path(), ["add", "file.txt"]);
+        git_command(repo_dir.path(), ["commit", "-m", "published"]);
+        let published_sha = git_command_output(repo_dir.path(), ["rev-parse", "HEAD"]);
+        git_command(
+            repo_dir.path(),
+            ["update-ref", "refs/remotes/origin/main", published_sha.trim()],
+        );
+
+        fs::write(&file_path, "local only\n").unwrap();
+        git_command(repo_dir.path(), ["add", "file.txt"]);
+        git_command(repo_dir.path(), ["commit", "-m", "local only"]);
+
+        let repository = RealGitRepository::new(
+            &repo_dir.path().join(".git"),
+            None,
+            Some("git".into()),
+            cx.executor(),
+        )
+        .unwrap();
+
+        let injected_path = repo_dir.path().join("injected");
+        let crafted: SharedString = format!("--output={}", injected_path.display()).into();
+        let outgoing = repository.outgoing_commits(Some(crafted), 50).await.unwrap();
+        assert!(!outgoing.truncated);
+        assert_eq!(
+            outgoing
+                .commits
+                .iter()
+                .map(|commit| commit.subject.as_ref())
+                .collect::<Vec<_>>(),
+            vec!["local only"]
+        );
+
+        let created = fs::read_dir(repo_dir.path())
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.starts_with("injected"))
+            .collect::<Vec<_>>();
+        assert!(created.is_empty(), "git must not create {created:?}");
     }
 }

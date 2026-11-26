@@ -54,6 +54,7 @@ mod git_runtime_diagnostics;
 pub mod multi_diff_view;
 pub mod picker_prompt;
 pub mod project_diff;
+pub mod push_preview;
 pub(crate) mod remote_output;
 pub mod repository_selector;
 pub mod solo_diff_view;
@@ -230,6 +231,9 @@ pub fn init(cx: &mut App) {
                 panel.update(cx, |panel, cx| {
                     panel.push(false, false, window, cx);
                 });
+            });
+            workspace.register_action(|workspace, _: &git::PreviewPush, window, cx| {
+                crate::push_preview::PushPreview::deploy(workspace, window, cx);
             });
             workspace.register_action(|workspace, _: &git::PushTo, window, cx| {
                 let Some(panel) = workspace.panel::<git_panel::GitPanel>(cx) else {
@@ -1221,6 +1225,7 @@ mod remote_button {
                         .action(i18n::t!("b4588d032129f61b"), git::Pull.boxed_clone())
                         .action(i18n::t!("98fd095c4dd942bb"), git::PullRebase.boxed_clone())
                         .separator()
+                        .action(i18n::t!("a33e65aa3a764f25"), git::PreviewPush.boxed_clone())
                         .action(i18n::t!("c757c9cc2dfaf9d5"), git::Push.boxed_clone())
                         .action(i18n::t!("f445565918f4dd5e"), git::PushTo.boxed_clone())
                         .action(i18n::t!("cbb348f18bdea850"), git::ForcePush.boxed_clone())

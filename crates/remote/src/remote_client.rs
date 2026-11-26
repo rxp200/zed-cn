@@ -182,6 +182,9 @@ pub const CAD_DOCUMENTS_CAPABILITY: &str = "cad_documents_v1";
 pub const UPLOAD_CHUNKS_CAPABILITY: &str = "upload_chunks_v1";
 pub const DOWNLOAD_CHUNKS_CAPABILITY: &str = "download_chunks_v1";
 pub const GIT_OPERATION_CANCELLATION_CAPABILITY: &str = "git_operation_cancellation_v1";
+/// The server can list the commits that pushing a branch would send, so the
+/// client can show a push preview before running `git push`.
+pub const GIT_OUTGOING_COMMITS_CAPABILITY: &str = "git_outgoing_commits_v1";
 pub const PERSISTENT_TERMINALS_CAPABILITY: &str = "persistent_terminals_v1";
 pub const PERSISTENT_TERMINAL_STREAMING_CAPABILITY: &str = "persistent_terminal_streaming_v1";
 /// The server can keep promoted terminals alive independently of a client
@@ -1585,6 +1588,10 @@ impl RemoteClient {
         self.client.supports_git_operation_cancellation.load(SeqCst)
     }
 
+    pub fn supports_git_outgoing_commits(&self) -> bool {
+        self.client.supports_git_outgoing_commits.load(SeqCst)
+    }
+
     pub fn supports_persistent_terminals(&self) -> bool {
         self.client.supports_persistent_terminals.load(SeqCst)
     }
@@ -2398,6 +2405,7 @@ pub(crate) struct ChannelClient {
     supports_upload_chunks: AtomicBool,
     supports_download_chunks: AtomicBool,
     supports_git_operation_cancellation: AtomicBool,
+    supports_git_outgoing_commits: AtomicBool,
     supports_persistent_terminals: AtomicBool,
     supports_persistent_terminal_streaming: AtomicBool,
     supports_hosted_terminals: AtomicBool,
@@ -2444,6 +2452,7 @@ impl ChannelClient {
             supports_upload_chunks: AtomicBool::new(false),
             supports_download_chunks: AtomicBool::new(false),
             supports_git_operation_cancellation: AtomicBool::new(false),
+            supports_git_outgoing_commits: AtomicBool::new(false),
             supports_persistent_terminals: AtomicBool::new(false),
             supports_persistent_terminal_streaming: AtomicBool::new(false),
             supports_hosted_terminals: AtomicBool::new(false),
@@ -2473,6 +2482,7 @@ impl ChannelClient {
                 UPLOAD_CHUNKS_CAPABILITY.to_string(),
                 DOWNLOAD_CHUNKS_CAPABILITY.to_string(),
                 GIT_OPERATION_CANCELLATION_CAPABILITY.to_string(),
+                GIT_OUTGOING_COMMITS_CAPABILITY.to_string(),
                 PERSISTENT_TERMINALS_CAPABILITY.to_string(),
                 PERSISTENT_TERMINAL_STREAMING_CAPABILITY.to_string(),
                 HOSTED_TERMINALS_CAPABILITY.to_string(),
@@ -2567,6 +2577,8 @@ impl ChannelClient {
                 .store(supports(DOWNLOAD_CHUNKS_CAPABILITY), SeqCst);
             this.supports_git_operation_cancellation
                 .store(supports(GIT_OPERATION_CANCELLATION_CAPABILITY), SeqCst);
+            this.supports_git_outgoing_commits
+                .store(supports(GIT_OUTGOING_COMMITS_CAPABILITY), SeqCst);
             this.supports_model_chunks
                 .store(supports(MODEL_CHUNKS_CAPABILITY), SeqCst);
             this.supports_document_chunks
@@ -4155,6 +4167,7 @@ mod customized_tests {
         assert!(!client.supports_git_operation_cancellation.load(SeqCst));
         assert!(!client.supports_create_remote_directory.load(SeqCst));
         assert!(!client.supports_list_worktree_files.load(SeqCst));
+        assert!(!client.supports_git_outgoing_commits.load(SeqCst));
         for (capabilities, expected) in [
             (Vec::new(), false),
             (vec![DOCUMENT_CHUNKS_CAPABILITY.to_owned()], true),
@@ -4300,6 +4313,23 @@ mod customized_tests {
                 .expect("deliver worktree file listing capabilities");
             cx.run_until_parked();
             assert_eq!(client.supports_list_worktree_files.load(SeqCst), expected);
+        }
+        for (capabilities, expected) in [
+            (vec![GIT_OUTGOING_COMMITS_CAPABILITY.to_owned()], true),
+            (
+                vec![
+                    GIT_OUTGOING_COMMITS_CAPABILITY.to_owned(),
+                    LIST_WORKTREE_FILES_CAPABILITY.to_owned(),
+                ],
+                true,
+            ),
+            (Vec::new(), false),
+        ] {
+            incoming_tx
+                .unbounded_send(proto::RemoteStarted { capabilities }.into_envelope(0, None, None))
+                .expect("deliver git outgoing commits capabilities");
+            cx.run_until_parked();
+            assert_eq!(client.supports_git_outgoing_commits.load(SeqCst), expected);
         }
     }
 

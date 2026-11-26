@@ -2563,6 +2563,17 @@ impl FakeFs {
         .unwrap();
     }
 
+    pub fn set_outgoing_commits(
+        &self,
+        dot_git: &Path,
+        commits: Vec<git::repository::CommitSummary>,
+    ) {
+        self.with_git_state(dot_git, true, |state| {
+            state.outgoing_commits = commits;
+        })
+        .unwrap();
+    }
+
     pub fn set_graph_error(&self, dot_git: &Path, error: Option<String>) {
         self.with_git_state(dot_git, true, |state| {
             state.simulated_graph_error = error;

@@ -13,10 +13,11 @@ use git::{
     blame::Blame,
     repository::{
         AUTHOR_SEARCH_QUERY_PREFIX, AskPassDelegate, Branch, CommitData, CommitDataReader,
-        CommitDetails, CommitOptions, CreateWorktreeTarget, FetchOptions,
+        CommitDetails, CommitOptions, CommitSummary, CreateWorktreeTarget, FetchOptions,
         FileHistoryChangedFileSets, GRAPH_CHUNK_SIZE, GitRepository, GitRepositoryCheckpoint,
-        InitialGraphCommitData, LogOrder, LogSource, OperationCancellation, PushOptions, RefEdit,
-        Remote, RepoPath, ResetMode, SearchCommitArgs, Worktree, commit_hash_search_query,
+        InitialGraphCommitData, LogOrder, LogSource, OperationCancellation, OutgoingCommits,
+        PushOptions, RefEdit, Remote, RepoPath, ResetMode, SearchCommitArgs, Worktree,
+        commit_hash_search_query,
     },
     stash::GitStash,
     status::{
@@ -79,6 +80,7 @@ pub struct FakeGitRepositoryState {
     pub worktrees_requiring_force_delete: HashSet<PathBuf>,
     pub refs: HashMap<String, String>,
     pub graph_commits: Vec<Arc<InitialGraphCommitData>>,
+    pub outgoing_commits: Vec<CommitSummary>,
     pub commit_data: HashMap<Oid, FakeCommitDataEntry>,
     pub stash_entries: GitStash,
     pub commit_template: Option<GitCommitTemplate>,
@@ -107,6 +109,7 @@ impl FakeGitRepositoryState {
             oids: Default::default(),
             remotes: HashMap::default(),
             graph_commits: Vec::new(),
+            outgoing_commits: Vec::new(),
             commit_data: Default::default(),
             commit_history: Vec::new(),
             stash_entries: Default::default(),
@@ -697,6 +700,19 @@ impl GitRepository for FakeGitRepository {
             // because that's what git itself does
             branches.sort_by(|a, b| a.ref_name.cmp(&b.ref_name));
             Ok(branches.into())
+        })
+    }
+
+    fn outgoing_commits(
+        &self,
+        _upstream_ref: Option<SharedString>,
+        limit: usize,
+    ) -> BoxFuture<'_, Result<OutgoingCommits>> {
+        self.with_state_async(false, move |state| {
+            Ok(OutgoingCommits {
+                commits: state.outgoing_commits.iter().take(limit).cloned().collect(),
+                truncated: state.outgoing_commits.len() > limit,
+            })
         })
     }
 

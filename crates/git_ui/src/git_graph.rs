@@ -685,7 +685,7 @@ fn timestamp_format() -> &'static [BorrowedFormatItem<'static>] {
     })
 }
 
-fn format_timestamp(timestamp: i64) -> String {
+pub(crate) fn format_timestamp(timestamp: i64) -> String {
     let Ok(datetime) = OffsetDateTime::from_unix_timestamp(timestamp) else {
         return "Unknown".to_string();
     };

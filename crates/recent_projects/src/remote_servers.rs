@@ -86,14 +86,35 @@ const JUMP_HOST_POPOVER_HEIGHT: Rems = rems(14.);
 /// Rows a jump-host popover shows before its list starts scrolling. A shorter
 /// candidate list gets a shorter popover instead of a full-height panel with
 /// nothing under the last row.
-const JUMP_HOST_POPOVER_ROWS: f32 = 4.;
+const JUMP_HOST_POPOVER_ROWS: usize = 4;
 
-/// Height of the jump-host popover for a given number of candidates. Candidate
-/// rows are one or two lines tall, so the estimate only has to be close: the
-/// list scrolls when it is wrong in either direction.
-fn jump_host_popover_height(rows: usize) -> Rems {
-    let rows = (rows as f32).clamp(1., JUMP_HOST_POPOVER_ROWS);
-    rems((2.5 * rows + 3.).min(JUMP_HOST_POPOVER_HEIGHT.0))
+/// One-line candidate row, a row with a second `user@host:port` line, and the
+/// search field plus the list padding and the popover border around them.
+const JUMP_HOST_ONE_LINE_ROW_HEIGHT: f32 = 1.9;
+const JUMP_HOST_TWO_LINE_ROW_HEIGHT: f32 = 2.9;
+const JUMP_HOST_POPOVER_CHROME_HEIGHT: f32 = 3.;
+
+/// Height of the jump-host popover for the candidates it will list.
+///
+/// Rows are one or two lines tall depending on whether the candidate has a
+/// detail line, so the estimate adds up the real rows instead of multiplying one
+/// row height by the count: a list of two-line rows would otherwise be laid out
+/// taller than the popover and start out scrolled. The estimate only has to be
+/// close, since the list scrolls when it is off in either direction.
+fn jump_host_popover_height(candidates: &[JumpHostCandidate]) -> Rems {
+    let rows = candidates
+        .iter()
+        .take(JUMP_HOST_POPOVER_ROWS)
+        .map(|candidate| {
+            if candidate.shows_detail() {
+                JUMP_HOST_TWO_LINE_ROW_HEIGHT
+            } else {
+                JUMP_HOST_ONE_LINE_ROW_HEIGHT
+            }
+        })
+        .sum::<f32>()
+        .max(JUMP_HOST_ONE_LINE_ROW_HEIGHT);
+    rems((JUMP_HOST_POPOVER_CHROME_HEIGHT + rows).min(JUMP_HOST_POPOVER_HEIGHT.0))
 }
 
 /// Records `project` as the most recently used location on a server,
@@ -396,6 +417,11 @@ struct CreateRemoteServerForm {
     key_file: Option<PathBuf>,
     /// A key that was already imported for this form, reused on retry.
     key_id: Option<String>,
+    /// Display name of the key store entry `key_id` points at. A connection only
+    /// stores the key id, so the name shown to the user has to be looked up in
+    /// the key store when the form opens; without it the key section rendered as
+    /// empty even though submitting the form kept using that key.
+    bound_key_name: Option<SharedString>,
     jump_hosts: Vec<JumpHost>,
     jump_host_picker: Option<Entity<Picker<JumpHostPickerDelegate>>>,
     /// Window position the jump-host popover is anchored to.
@@ -451,6 +477,7 @@ impl CreateRemoteServerForm {
             auth_method: SshAuthMethod::Password,
             key_file: None,
             key_id: None,
+            bound_key_name: None,
             jump_hosts: Vec::new(),
             jump_host_picker: None,
             jump_host_picker_anchor: None,
@@ -525,10 +552,28 @@ impl CreateRemoteServerForm {
         form.proxy_disabled = connection.proxy_disabled;
         form.advanced_open = !form.jump_hosts.is_empty()
             || connection.proxy.is_some()
+            || connection.proxy_disabled
             || connection.connection_timeout.is_some();
         form.saved_index = Some(index);
         form.editing = true;
         form
+    }
+
+    /// Whether the form already has a key: a file chosen in this form, or the
+    /// key store entry an edited host is bound to.
+    fn has_key(&self) -> bool {
+        self.key_file.is_some() || self.key_id.is_some()
+    }
+
+    /// Text of the key drop surface. It doubles as the empty state and as the
+    /// status of the key that will actually be used, so an already-bound key is
+    /// never shown as if the field were empty.
+    fn key_status_label(&self) -> SharedString {
+        key_status_label(
+            self.key_file.as_deref(),
+            self.key_id.as_deref(),
+            self.bound_key_name.as_ref(),
+        )
     }
 
     /// A summary of the non-default advanced values, shown while the section
@@ -542,7 +587,12 @@ impl CreateRemoteServerForm {
                 self.jump_hosts.len()
             ));
         }
-        if trimmed_text(self.proxy_editor.read(cx).text(cx)).is_some() {
+        if let Some(timeout) = trimmed_text(self.timeout_editor.read(cx).text(cx)) {
+            parts.push(i18n::t_args!("0a5c2748dfa71f2b", timeout));
+        }
+        if self.proxy_disabled {
+            parts.push(i18n::t!("b506907eab5fcdfe").to_string());
+        } else if trimmed_text(self.proxy_editor.read(cx).text(cx)).is_some() {
             parts.push(i18n::t!("48b970b568a7f8f9").to_string());
         }
         if parts.is_empty() {
@@ -661,6 +711,13 @@ impl JumpHostCandidate {
         }
         detail
     }
+
+    /// Whether the picker row needs a second line for its detail. A saved
+    /// server's label is its nickname, so a row without a distinct
+    /// `user@host:port` would only repeat itself.
+    fn shows_detail(&self) -> bool {
+        self.detail() != self.label
+    }
 }
 
 /// Combines the saved Zed hosts with the host aliases from `~/.ssh/config`.
@@ -703,6 +760,11 @@ impl JumpHostPickerDelegate {
             matching,
             selected_index: 0,
         }
+    }
+
+    /// Popover height for the candidates this delegate lists.
+    fn popover_height(&self) -> Rems {
+        jump_host_popover_height(&self.candidates)
     }
 }
 
@@ -806,23 +868,27 @@ impl PickerDelegate for JumpHostPickerDelegate {
         // A saved server's label is its nickname, so repeating it as the detail
         // would only cost a line of an already short popover.
         let detail = candidate.detail();
-        let show_detail = detail != candidate.label;
+        let show_detail = candidate.shows_detail();
         Some(
             ListItem::new(SharedString::from(format!("jump-host-{candidate_index}")))
                 .inset(true)
                 .spacing(ui::ListItemSpacing::Sparse)
                 .toggle_state(selected)
                 .start_slot(Icon::new(IconName::Server).color(Color::Muted))
-                .child(v_flex().child(Label::new(candidate.label.clone())).when(
-                    show_detail,
-                    |this| {
-                        this.child(
-                            Label::new(detail)
-                                .size(LabelSize::Small)
-                                .color(Color::Muted),
-                        )
-                    },
-                ))
+                .child(
+                    div()
+                        .debug_selector(move || format!("jump-host-row-{candidate_index}"))
+                        .child(v_flex().child(Label::new(candidate.label.clone())).when(
+                            show_detail,
+                            |this| {
+                                this.child(
+                                    Label::new(detail)
+                                        .size(LabelSize::Small)
+                                        .color(Color::Muted),
+                                )
+                            },
+                        )),
+                )
                 .when(candidate.source == JumpHostSource::SshConfig, |this| {
                     this.end_slot(
                         Label::new("~/.ssh/config")
@@ -2371,6 +2437,29 @@ fn managed_ssh_key_display_name(key: &ManagedSshKey) -> SharedString {
     })
 }
 
+/// Status line of the form's key drop surface.
+///
+/// A saved host can be bound to a key store entry, and importing a picked file
+/// also replaces the file path with a key id. Both cases have to name the key
+/// that will be used; rendering the surface as empty made the form look like the
+/// key had been forgotten even though submitting it kept using that key.
+fn key_status_label(
+    key_file: Option<&std::path::Path>,
+    key_id: Option<&str>,
+    bound_key_name: Option<&SharedString>,
+) -> SharedString {
+    if let Some(name) = key_file.and_then(|path| path.file_name()) {
+        return SharedString::from(i18n::t_args!("bbe0fecf4af46fe9", name.to_string_lossy()));
+    }
+    if let Some(key_id) = key_id {
+        let name = bound_key_name
+            .cloned()
+            .unwrap_or_else(|| SharedString::from(key_id.to_owned()));
+        return SharedString::from(i18n::t_args!("0547c92970f12ef3", name));
+    }
+    i18n::t!("0b26467a5e72a15d").into()
+}
+
 /// Index of the destructive answer in [`managed_ssh_key_removal_prompt`].
 ///
 /// The prompt preselects its first answer and Enter confirms the selection, so
@@ -3396,10 +3485,49 @@ impl RemoteServerProjects {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let bound_key_id = connection.ssh_key_id.clone();
         let form = CreateRemoteServerForm::for_edit(index, &connection, window, cx);
         self.mode = Mode::CreateRemoteServerForm(form);
         self.focus_handle(cx).focus(window, cx);
+        if let Some(key_id) = bound_key_id {
+            self.resolve_form_key_name(key_id, window, cx);
+        }
         cx.notify();
+    }
+
+    /// Looks up the user-facing name of the key store entry the edited host is
+    /// bound to. The key section showed no key at all while this was missing,
+    /// even though the saved connection kept using that key.
+    fn resolve_form_key_name(
+        &mut self,
+        key_id: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        cx.spawn_in(window, async move |this, cx| {
+            let key_id = cx
+                .background_spawn(async move { list_managed_ssh_keys() })
+                .await
+                .ok()
+                .and_then(|keys| {
+                    let key = keys.into_iter().find(|key| key.key_id == key_id)?;
+                    let name = managed_ssh_key_display_name(&key);
+                    Some((key.key_id, name))
+                });
+            let Some((resolved_id, name)) = key_id else {
+                return;
+            };
+            this.update(cx, |this, cx| {
+                if let Mode::CreateRemoteServerForm(state) = &mut this.mode
+                    && state.key_id.as_deref() == Some(resolved_id.as_str())
+                {
+                    state.bound_key_name = Some(name);
+                    cx.notify();
+                }
+            })
+            .log_err();
+        })
+        .detach();
     }
 
     fn view_in_progress_dev_container(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -4057,8 +4185,21 @@ impl RemoteServerProjects {
         if let Mode::CreateRemoteServerForm(state) = &mut self.mode {
             state.key_file = Some(path);
             state.key_id = None;
+            state.bound_key_name = None;
             state.auth_method = SshAuthMethod::Key;
             state.error = None;
+        }
+        cx.notify();
+    }
+
+    /// Drops the key store entry an edited host was bound to, so the next
+    /// connection falls back to the local `~/.ssh` keys. Without this there was
+    /// no way to stop using an already-imported key from the form.
+    fn clear_form_key(&mut self, cx: &mut Context<Self>) {
+        if let Mode::CreateRemoteServerForm(state) = &mut self.mode {
+            state.key_file = None;
+            state.key_id = None;
+            state.bound_key_name = None;
         }
         cx.notify();
     }
@@ -4152,7 +4293,11 @@ impl RemoteServerProjects {
         // scrollbar, and it left the results list no height to fill, so a
         // popover with candidates showed the search field and no rows.
         let picker = cx.new(|cx| {
-            Picker::uniform_list(delegate, window, cx)
+            // Candidate rows are one or two lines tall, so the picker has to lay
+            // out variable-height rows; the uniform-height list measured the
+            // first row and gave every other row that height, which painted the
+            // detail line of a two-line row over the row below it.
+            Picker::list(delegate, window, cx)
                 .show_scrollbar(true)
                 .fill_results_height()
                 .embedded()
@@ -4275,6 +4420,7 @@ impl RemoteServerProjects {
 
         cx.spawn_in(window, async move |this, cx| {
             let mut import_failed = false;
+            let mut imported_key_name = None;
             let key_id = match (draft.existing_key_id.clone(), draft.key_file.clone()) {
                 (Some(key_id), _) => Some(key_id),
                 (None, Some(path)) => match remote::import_managed_ssh_key(
@@ -4286,7 +4432,10 @@ impl RemoteServerProjects {
                 )
                 .await
                 {
-                    Ok(imported) => Some(imported.record.key_id),
+                    Ok(imported) => {
+                        imported_key_name = Some(managed_ssh_key_display_name(&imported.record));
+                        Some(imported.record.key_id)
+                    }
                     Err(error) => {
                         let message = SharedString::from(i18n::t_args!(
                             "41b86c2b700f0a24",
@@ -4316,6 +4465,7 @@ impl RemoteServerProjects {
                 if let Mode::CreateRemoteServerForm(state) = &mut this.mode {
                     state.saved_index = Some(index);
                     state.key_id = key_id;
+                    state.bound_key_name = imported_key_name;
                     state.key_file = None;
                 }
                 if editing {
@@ -4375,6 +4525,7 @@ impl RemoteServerProjects {
         cx.notify();
 
         cx.spawn_in(window, async move |this, cx| {
+            let mut imported_key_name = None;
             let key_id = match (draft.existing_key_id.clone(), draft.key_file.clone()) {
                 (Some(key_id), _) => Some(key_id),
                 (None, Some(path)) => match remote::import_managed_ssh_key(
@@ -4386,7 +4537,10 @@ impl RemoteServerProjects {
                 )
                 .await
                 {
-                    Ok(imported) => Some(imported.record.key_id),
+                    Ok(imported) => {
+                        imported_key_name = Some(managed_ssh_key_display_name(&imported.record));
+                        Some(imported.record.key_id)
+                    }
                     Err(error) => {
                         let message = SharedString::from(i18n::t_args!(
                             "41b86c2b700f0a24",
@@ -4415,6 +4569,7 @@ impl RemoteServerProjects {
                 let connection_options = form_connection_options(&draft, key_id.clone());
                 if let Mode::CreateRemoteServerForm(state) = &mut this.mode {
                     state.key_id = key_id;
+                    state.bound_key_name = imported_key_name;
                 }
                 this.begin_form_connect(connection_options, FormConnectIntent::Test, window, cx);
             })
@@ -4989,10 +5144,11 @@ impl RemoteServerProjects {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let candidate_rows = state
+        let jump_host_popover_height = state
             .jump_host_picker
             .as_ref()
-            .map_or(1, |picker| picker.read(cx).delegate.candidates.len());
+            .map(|picker| picker.read(cx).delegate.popover_height())
+            .unwrap_or(JUMP_HOST_POPOVER_HEIGHT);
         if let Some(prompt) = state.ssh_prompt.clone() {
             // Track the prompt's own focus handle, not the modal's: clicking the
             // password or host-key input has to focus that input, otherwise the
@@ -5014,11 +5170,6 @@ impl RemoteServerProjects {
             SshAuthMethod::Key => i18n::t!("429db636b4adcef2"),
             SshAuthMethod::Interactive => i18n::t!("ca192a6339891b48"),
         };
-        let key_label = state
-            .key_file
-            .as_ref()
-            .and_then(|path| path.file_name())
-            .map(|name| i18n::t_args!("bbe0fecf4af46fe9", name.to_string_lossy()));
 
         let host_error = state.host_error.clone();
         let advanced_summary = state.advanced_summary(cx);
@@ -5159,6 +5310,12 @@ impl RemoteServerProjects {
                     .color(Color::Muted),
             )
             .when(state.auth_method == SshAuthMethod::Key, |this| {
+                let key_status_label = state.key_status_label();
+                let choose_key_label = if state.has_key() {
+                    i18n::t!("cebb021deb58fe91")
+                } else {
+                    i18n::t!("75141f859dc99aa2")
+                };
                 this.child(
                     v_flex()
                         .w_full()
@@ -5179,13 +5336,23 @@ impl RemoteServerProjects {
                                         .color(Color::Muted),
                                 )
                                 .child(
-                                    Label::new(i18n::t!("0b26467a5e72a15d"))
-                                        .size(LabelSize::XSmall)
-                                        .color(Color::Muted)
-                                        .flex_1(),
+                                    div()
+                                        .debug_selector(|| "form-key-status".into())
+                                        .flex_1()
+                                        .min_w_0()
+                                        .child(
+                                            Label::new(key_status_label)
+                                                .size(LabelSize::XSmall)
+                                                .color(if state.has_key() {
+                                                    Color::Default
+                                                } else {
+                                                    Color::Muted
+                                                })
+                                                .truncate(),
+                                        ),
                                 )
                                 .child(
-                                    Button::new("choose-key-file", i18n::t!("75141f859dc99aa2"))
+                                    Button::new("choose-key-file", choose_key_label)
                                         .size(ButtonSize::Default)
                                         .label_size(LabelSize::Small)
                                         .on_click(cx.listener(|this, _, window, cx| {
@@ -5193,7 +5360,7 @@ impl RemoteServerProjects {
                                         })),
                                 ),
                         )
-                        .when(state.key_file.is_none() && state.key_id.is_none(), |this| {
+                        .when(!state.has_key(), |this| {
                             this.child(
                                 div()
                                     .debug_selector(|| "form-key-default-hint".into())
@@ -5204,18 +5371,47 @@ impl RemoteServerProjects {
                                     ),
                             )
                         })
-                        .when_some(key_label.clone(), |this, label| {
+                        .when_some(
+                            state.key_id.as_ref().filter(|_| state.key_file.is_none()),
+                            |this, _| {
+                                this.child(
+                                    h_flex()
+                                        .w_full()
+                                        .gap_2()
+                                        .items_center()
+                                        .child(
+                                            div()
+                                                .debug_selector(|| "form-key-unbind".into())
+                                                .child(
+                                                    Button::new(
+                                                        "clear-form-key",
+                                                        i18n::t!("edfa1981307e121f"),
+                                                    )
+                                                    .style(ButtonStyle::Transparent)
+                                                    .label_size(LabelSize::Small)
+                                                    .color(Color::Muted)
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        this.clear_form_key(cx)
+                                                    })),
+                                                ),
+                                        )
+                                        .child(
+                                            Label::new(i18n::t!("e02fc8f1ec338629"))
+                                                .size(LabelSize::XSmall)
+                                                .color(Color::Muted)
+                                                .flex_1()
+                                                .truncate(),
+                                        ),
+                                )
+                            },
+                        )
+                        .when(state.key_file.is_some(), |this| {
                             this.child(
-                                Label::new(label)
+                                Label::new(i18n::t!("20199ba6524b09f6"))
                                     .size(LabelSize::XSmall)
                                     .color(Color::Muted),
                             )
-                        })
-                        .child(
-                            Label::new(i18n::t!("20199ba6524b09f6"))
-                                .size(LabelSize::XSmall)
-                                .color(Color::Muted),
-                        ),
+                        }),
                 )
             });
 
@@ -5704,7 +5900,7 @@ impl RemoteServerProjects {
                                                 .debug_selector(|| "form-jump-host-popover".into())
                                                 .occlude()
                                                 .w(JUMP_HOST_POPOVER_WIDTH)
-                                                .h(jump_host_popover_height(candidate_rows))
+                                                .h(jump_host_popover_height)
                                                 .overflow_hidden()
                                                 .rounded_md()
                                                 .border_1()
@@ -10130,6 +10326,123 @@ mod tests {
         );
     }
 
+    /// A saved host that is bound to a managed key keeps using that key, so the
+    /// form has to show it instead of rendering the key section as untouched.
+    /// Dropping the binding is the only way back to the local `~/.ssh` keys.
+    #[gpui::test]
+    async fn test_edit_server_form_shows_the_bound_managed_key(cx: &mut TestAppContext) {
+        let app_state = init_test(cx);
+        let fs = app_state.fs.as_fake();
+        let project = Project::test(fs.clone(), [], cx).await;
+        let (multi_workspace, cx) = cx.add_window_view(|window, cx| {
+            let workspace = cx.new(|cx| Workspace::test_new(project, window, cx));
+            MultiWorkspace::new(workspace, window, cx)
+        });
+        let workspace =
+            multi_workspace.read_with(cx, |multi_workspace, _| multi_workspace.workspace().clone());
+        cx.simulate_resize(gpui::size(px(1200.), px(800.)));
+        workspace.update_in(cx, |workspace, window, cx| {
+            let weak = cx.weak_entity();
+            workspace.toggle_modal(window, cx, |window, cx| {
+                RemoteServerProjects::new(false, fs.clone(), window, weak, cx)
+            });
+        });
+        cx.run_until_parked();
+
+        workspace.update_in(cx, |workspace, window, cx| {
+            let modal = workspace
+                .active_modal::<RemoteServerProjects>(cx)
+                .expect("the remote server modal is open");
+            modal.update(cx, |modal, cx| {
+                let connection = SshConnectionOptions {
+                    host: "build.example.com".into(),
+                    auth_method: Some(SshAuthMethod::Key),
+                    ssh_key_id: Some("ssh-ed25519:bound".into()),
+                    ..Default::default()
+                };
+                let mut form =
+                    CreateRemoteServerForm::for_edit(SshServerIndex(0), &connection, window, cx);
+                form.bound_key_name = Some("build-key".into());
+                modal.mode = Mode::CreateRemoteServerForm(form);
+                cx.notify();
+            });
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+
+        assert!(
+            cx.debug_bounds("form-key-status").is_some(),
+            "the key section names the key the form is bound to"
+        );
+        let unbind = cx
+            .debug_bounds("form-key-unbind")
+            .expect("a bound key can be dropped from the form");
+        assert!(
+            cx.debug_bounds("form-key-default-hint").is_none(),
+            "a bound key is not the empty state"
+        );
+
+        cx.simulate_click(unbind.center(), Modifiers::default());
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        workspace.update_in(cx, |workspace, _window, cx| {
+            let modal = workspace
+                .active_modal::<RemoteServerProjects>(cx)
+                .expect("the remote server modal is open");
+            modal.read_with(cx, |modal, _cx| {
+                let Mode::CreateRemoteServerForm(state) = &modal.mode else {
+                    panic!("expected the form mode");
+                };
+                assert!(
+                    state.key_id.is_none(),
+                    "dropping the binding stops the saved host from using that key"
+                );
+            });
+        });
+        assert!(
+            cx.debug_bounds("form-key-unbind").is_none(),
+            "the unbind action disappears with the binding"
+        );
+        assert!(
+            cx.debug_bounds("form-key-default-hint").is_some(),
+            "an unbound host falls back to the local default keys"
+        );
+    }
+
+    #[test]
+    fn key_status_label_never_hides_a_key_that_will_be_used() {
+        let empty = key_status_label(None, None, None);
+        assert_eq!(
+            empty,
+            SharedString::from(i18n::t!("0b26467a5e72a15d")),
+            "an empty key section still invites dropping a file"
+        );
+
+        let file = key_status_label(
+            Some(std::path::Path::new("/home/user/.ssh/id_ed25519")),
+            None,
+            None,
+        );
+        assert_eq!(
+            file,
+            SharedString::from(i18n::t_args!("bbe0fecf4af46fe9", "id_ed25519".to_string())),
+            "a chosen file is named in the drop surface"
+        );
+
+        let bound = SharedString::from("build-key");
+        assert_eq!(
+            key_status_label(None, Some("ssh-ed25519:bound"), Some(&bound)),
+            SharedString::from(i18n::t_args!("0547c92970f12ef3", "build-key")),
+            "a bound key is shown by name instead of leaving the field looking empty"
+        );
+
+        assert_eq!(
+            key_status_label(None, Some("ssh-ed25519:bound"), None),
+            SharedString::from(i18n::t_args!("0547c92970f12ef3", "ssh-ed25519:bound")),
+            "a key store entry that could not be resolved still shows its id"
+        );
+    }
+
     #[gpui::test]
     async fn test_add_server_form_summarizes_non_default_advanced_values(cx: &mut TestAppContext) {
         let app_state = init_test(cx);
@@ -10159,6 +10472,9 @@ mod tests {
                 username: None,
                 port: None,
             }];
+            state
+                .timeout_editor
+                .update(cx, |editor, cx| editor.set_text("45", window, cx));
             state.proxy_editor.update(cx, |editor, cx| {
                 editor.set_text("socks5://127.0.0.1:1080", window, cx)
             });
@@ -10166,13 +10482,29 @@ mod tests {
                 state.advanced_summary(cx).as_deref(),
                 Some(
                     format!(
-                        "{} 1 · {}",
+                        "{} 1 · {} · {}",
                         i18n::t!("1031cfcb802afd94"),
+                        i18n::t_args!("0a5c2748dfa71f2b", "45"),
                         i18n::t!("48b970b568a7f8f9")
                     )
                     .as_str()
                 ),
                 "every non-default advanced value stays visible while collapsed"
+            );
+
+            state.proxy_disabled = true;
+            assert_eq!(
+                state.advanced_summary(cx).as_deref(),
+                Some(
+                    format!(
+                        "{} 1 · {} · {}",
+                        i18n::t!("1031cfcb802afd94"),
+                        i18n::t_args!("0a5c2748dfa71f2b", "45"),
+                        i18n::t!("b506907eab5fcdfe")
+                    )
+                    .as_str()
+                ),
+                "a disabled proxy is reported as disabled instead of by its unused address"
             );
         });
     }
@@ -11174,6 +11506,118 @@ mod tests {
                 );
             });
         });
+    }
+
+    /// Candidate rows are one or two lines tall: a saved server shows its
+    /// nickname above `user@host:port`, while a `~/.ssh/config` alias or a host
+    /// whose nickname is the whole address needs one line. Every row has to be
+    /// given its own height; a uniform-height list lays the two-line rows out in
+    /// a one-line slot, so their detail text is painted over the next row.
+    #[gpui::test]
+    async fn jump_host_picker_mixed_row_heights_do_not_overlap(cx: &mut TestAppContext) {
+        let app_state = init_test(cx);
+        let fs = app_state.fs.as_fake();
+        let project = Project::test(fs.clone(), [], cx).await;
+        let (multi_workspace, cx) = cx.add_window_view(|window, cx| {
+            let workspace = cx.new(|cx| Workspace::test_new(project, window, cx));
+            MultiWorkspace::new(workspace, window, cx)
+        });
+        let workspace =
+            multi_workspace.read_with(cx, |multi_workspace, _| multi_workspace.workspace().clone());
+        cx.simulate_resize(gpui::size(px(1200.), px(800.)));
+        workspace.update_in(cx, |workspace, window, cx| {
+            let weak = cx.weak_entity();
+            workspace.toggle_modal(window, cx, |window, cx| {
+                RemoteServerProjects::new(false, fs.clone(), window, weak, cx)
+            });
+        });
+        cx.run_until_parked();
+
+        workspace.update_in(cx, |workspace, window, cx| {
+            let modal = workspace
+                .active_modal::<RemoteServerProjects>(cx)
+                .expect("the remote server modal is open");
+            modal.update(cx, |modal, cx| {
+                modal.mode = Mode::CreateRemoteServerForm(CreateRemoteServerForm::new(window, cx));
+                let Mode::CreateRemoteServerForm(state) = &mut modal.mode else {
+                    panic!("expected the form mode");
+                };
+                state.advanced_open = true;
+                cx.notify();
+            });
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+
+        let button = cx
+            .debug_bounds("add-jump-host")
+            .expect("the add jump host button is laid out");
+        let anchor = point(button.left(), button.bottom());
+        let candidates = vec![
+            // One line: the nickname is the whole destination.
+            JumpHostCandidate::saved("jump-a".into(), "jump-a".into(), None, None),
+            // Two lines: nickname plus the ssh destination.
+            JumpHostCandidate::saved(
+                "jump".into(),
+                "127.0.0.1".into(),
+                Some("dev".into()),
+                Some(13001),
+            ),
+            // One line from the ssh config.
+            JumpHostCandidate::from_ssh_config("测试主机".into()),
+            // Two lines again.
+            JumpHostCandidate::saved(
+                "prod".into(),
+                "prod.example.com".into(),
+                Some("ubuntu".into()),
+                None,
+            ),
+        ];
+        workspace.update_in(cx, |workspace, window, cx| {
+            let modal = workspace
+                .active_modal::<RemoteServerProjects>(cx)
+                .expect("the remote server modal is open");
+            modal.update(cx, |modal, cx| {
+                modal.show_jump_host_picker(candidates, anchor, window, cx);
+            });
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+
+        let popover = cx
+            .debug_bounds("form-jump-host-popover")
+            .expect("the jump-host overlay is laid out");
+        let rows = [
+            cx.debug_bounds("jump-host-row-0")
+                .expect("the first candidate row is laid out"),
+            cx.debug_bounds("jump-host-row-1")
+                .expect("the second candidate row is laid out"),
+            cx.debug_bounds("jump-host-row-2")
+                .expect("the third candidate row is laid out"),
+            cx.debug_bounds("jump-host-row-3")
+                .expect("the fourth candidate row is laid out"),
+        ];
+
+        for (index, pair) in rows.windows(2).enumerate() {
+            let (above, below) = (pair[0], pair[1]);
+            assert!(
+                above.bottom() <= below.top(),
+                "row {index} must not be painted over row {}: {above:?} vs {below:?}",
+                index + 1
+            );
+        }
+        for (index, row) in rows.iter().enumerate() {
+            assert!(
+                row.top() >= popover.top() && row.bottom() <= popover.bottom(),
+                "row {index} must stay inside the popover: {row:?} vs {popover:?}"
+            );
+        }
+        assert!(
+            rows[1].size.height > rows[0].size.height,
+            "the two-line row is taller than the one-line row: {:?} vs {:?}",
+            rows[1],
+            rows[0]
+        );
     }
 
     /// A short candidate list gets a short popover, so it does not render a
